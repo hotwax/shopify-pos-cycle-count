@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<entity-facade-xml>
+  <moqui.basic.Enumeration enumId="DYNAMIC_COUNT" enumTypeId="CYCLE_CNT_PURPOSE"
+    enumName="Dynamic Count" description="Count the full store quantity of products selected while counting"/>
+</entity-facade-xml>

@@ -1,0 +1,23 @@
+client_id = "29bfaa753f00ec73a3b4d4bb086ba768"
+name = "HotWax Cycle Count"
+application_url = "https://shopify.dev/apps/default-app-home"
+embedded = true
+
+[build]
+automatically_update_urls_on_dev = true
+
+[webhooks]
+api_version = "2026-07"
+
+[access.admin]
+direct_api_mode = "online"
+embedded_app_direct_api_access = true
+
+[access_scopes]
+scopes = ""
+
+[auth]
+redirect_urls = []
+
+[pos]
+embedded = true
