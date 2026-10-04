@@ -1,0 +1,114 @@
+{
+  "candidateHead": "146d9d208c698675f35efd7324916a12f55ecc4c",
+  "implementationSha": "82773c561bc3e1bfe027f22cf64b80024b7785a3",
+  "platform": "Physical iPad / Shopify POS 11.16.2 (530647)",
+  "backend": "Real Demo OMS / BROOKLYN",
+  "sessionId": "POSI_0a2026100400b11",
+  "input": "Native HID TextArea Return via WDA; not physical scanner",
+  "method": "Temporary read-only native storage inspector. No API responses or business data were mocked. Inspector removed before final clean reopen.",
+  "closedAt": 1791147654210,
+  "immediateOmsAfterClose": [
+    {
+      "productId": "10001",
+      "quantity": 3
+    },
+    {
+      "productId": "10101",
+      "quantity": 2
+    }
+  ],
+  "omsWhileClosed": [
+    {
+      "productId": "10001",
+      "quantity": 3
+    },
+    {
+      "productId": "10101",
+      "quantity": 3
+    }
+  ],
+  "backgroundBeforeReopen": {
+    "at": 1791147710135,
+    "status": {
+      "sessionId": "POSI_0a2026100400b11",
+      "name": "QA Recovery B",
+      "pending": 0,
+      "unmatched": 0,
+      "state": "synced",
+      "lastSyncedAt": 1791147682791,
+      "at": 1791147682791,
+      "background": true
+    },
+    "receipt": {
+      "docId": "muu5a0xt-9od2flu3od",
+      "items": {
+        "10101": {
+          "revision": 3,
+          "quantity": 3,
+          "at": 1791147682791
+        }
+      }
+    },
+    "items": [
+      {
+        "productId": "10001",
+        "quantity": 3,
+        "revision": 1,
+        "syncedRevision": 1
+      },
+      {
+        "productId": "10101",
+        "quantity": 3,
+        "revision": 3,
+        "syncedRevision": 2
+      }
+    ]
+  },
+  "afterReceiptAdoption": {
+    "at": 1791147742913,
+    "status": {
+      "sessionId": "POSI_0a2026100400b11",
+      "name": "QA Recovery B",
+      "pending": 0,
+      "unmatched": 0,
+      "state": "synced",
+      "lastSyncedAt": 1791147682791,
+      "at": 1791147682791,
+      "background": true
+    },
+    "receipt": {
+      "docId": "muu5a0xt-9od2flu3od",
+      "items": {
+        "10101": {
+          "revision": 3,
+          "quantity": 3,
+          "at": 1791147682791
+        }
+      }
+    },
+    "items": [
+      {
+        "productId": "10001",
+        "quantity": 3,
+        "revision": 1,
+        "syncedRevision": 1
+      },
+      {
+        "productId": "10101",
+        "quantity": 3,
+        "revision": 3,
+        "syncedRevision": 3
+      }
+    ]
+  },
+  "cleanReopen": {
+    "diagnosticsAbsent": true,
+    "productId": "10101",
+    "quantity": 3
+  },
+  "limitations": [
+    "Online POS Home only",
+    "Actual hardware capture not tested",
+    "Earlier attempt synced in foreground and is excluded from background proof"
+  ]
+}

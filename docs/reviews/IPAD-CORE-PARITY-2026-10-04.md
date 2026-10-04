@@ -131,3 +131,33 @@ Harness observations were checked against fresh native UI: the hand search field
 - [Hard count: 1,722 zeros completed](evidence/native-core-hard-zero.png)
 - [Restored independent hand draft](evidence/native-core-hand-draft.png)
 - [Chronological scan events after product sorting](evidence/native-core-chronology.png)
+
+## Additional POS Home upload and opening cancellation checks
+
+On candidate head `146d9d2` (implementation `82773c5`), QA Recovery B
+`POSI_0a2026100400b11` accepted a native TextArea Return scan for
+`MSH0232Black`. Before closing, the UI showed quantity 3 and one product
+pending sync. Independent OMS read immediately after closing still showed 2.
+With the extension closed, the next read at 47 seconds showed 3.
+A read-only native inspector showed the background mailbox receipt for
+product `10101`, revision 3, quantity 3, and status `background: true`; the
+modal-owned item remained revision 3 / syncedRevision 2. Reopening adopted
+syncedRevision 3. After removing the inspector, the clean extension reopened
+at quantity 3. Product `10001` remained 3. An earlier attempt completed in the
+foreground and is excluded from background proof.
+
+Evidence: [native-background-upload.json](evidence/native-background-upload.json).
+This proves online POS Home upload and receipt adoption, not physical scanner
+input, offline execution, OS process suspension or changed-role ownership.
+
+Opening cancellation is partial: the clean capacity session showed Opening
+session at 2,666 ms, and Back at 3,471 ms returned to a usable summary without
+a late route change in the observed interval. The interrupted preparation
+stage was not identified. A temporary stage label later showed native journal
+opening, but the native Back element became stale as opening finished before
+the tap landed. No successful local-preparation cancellation is claimed.
+Both temporary diagnostic modifications were restored to the candidate source.
+
+The shared [QA Google Doc](https://docs.google.com/document/d/1QJxi_u8oLpWTde1GNrLioxo4FN-vYmlPmbO-cSfQ7dE/edit)
+now records 33 cases, including TC33 for this background check and the precise
+TC29 cancellation limitation.
