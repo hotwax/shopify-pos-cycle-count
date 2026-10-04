@@ -35,7 +35,7 @@ function ProductListContent({items,disabled=false,directed=false,onSelect,select
     (async()=>{
       let found;
       do found=await searchShop(query,needed,wanted);
-      while(!stale&&found&&!found.complete&&!found.capped&&found.ids.filter(wanted).length<needed);
+      while(!stale&&found&&!found.complete&&found.ids.filter(wanted).length<needed);
       if(!stale)setRemote(found?{query,...found,loading:false}:null);
     })().catch(()=>{if(!stale)setRemote(old=>old&&{...old,complete:true,loading:false});});
     return()=>{stale=true;};

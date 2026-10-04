@@ -132,6 +132,32 @@ test('product search keeps paging past pages without session products and report
   assert.deepEqual(remembered.sort((a, b) => a - b), [30, 1750]);
 });
 
+test('sparse filtered search resumes past twenty Shopify pages after its time slice', async t => {
+  let clock = 0, calls = 0;
+  t.mock.method(Date, 'now', () => clock);
+  const api: any = {searchProducts: async ({afterCursor}: any) => {
+    const page = afterCursor ? Number(afterCursor) : 0;
+    calls++; clock += 250;
+    return {items: Array.from({length: 50}, (_, i) => ({
+      id: page * 50 + i + 1, title: 'Product',
+      variants: [{id: (page * 50 + i + 1) * 10, title: 'Default Title', sku: ''}],
+    })), hasNextPage: page < 24, lastCursor: String(page + 1)};
+  }};
+  const members = [{productId: 'counted', variantId: 30}, {productId: 'uncounted', variantId: 12010}];
+  const search = createMemberSearch(api), remembered: number[] = [];
+  const wanted = (id: string) => id === 'uncounted';
+  const first = await search('product', 1, members, id => remembered.push(id), wanted);
+  assert.equal(first!.complete, false); assert.equal(calls, 16);
+  assert.deepEqual(first!.ids, ['counted']);
+  const resumed = await search('product', 1, members, id => remembered.push(id), wanted);
+  assert.equal(resumed!.complete, true); assert.equal(calls, 25);
+  assert.deepEqual(resumed!.ids.filter(wanted), ['uncounted']);
+  assert.deepEqual(remembered, [30, 12010]);
+  // Whole-result sorting callers also obtain the late member from the same cursor cache.
+  const all = await search('product', Infinity, members, () => {});
+  assert.deepEqual(all!.ids, ['counted', 'uncounted']); assert.equal(calls, 25);
+});
+
 test('receipts belong to one checkpoint document, so a recreated session cannot inherit them', async () => {
   const kv = fakeKV();
   const state = new CountState(kv.native, owner, lookup, () => {}, {deviceId: 'POS_1'});

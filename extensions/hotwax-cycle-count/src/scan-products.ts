@@ -76,11 +76,12 @@ type Member={productId:string;variantId?:number};
 /**
  * Search the shop's products through POS and keep only this session's products,
  * matched by Shopify variant ID, in Shopify's relevance order. Pages continue
- * until `needed` members are found or the results end (at most 20 pages per
- * query), so filtering out non-members never produces a false empty page.
+ * until `needed` members are found or the results end. Each call yields after
+ * four seconds and the next call resumes its cursor; a sparse count must not
+ * lose matches just because they occur late in the shop's search results.
  */
 export function createMemberSearch(api: ProductSearchApiContent | undefined) {
-  const cache=new Map<string,{ids:string[];seen:Set<string>;cursor?:string;done:boolean;pages:number;members:number}>();
+  const cache=new Map<string,{ids:string[];seen:Set<string>;cursor?:string;done:boolean;members:number}>();
   let generation=0;
   return async (query:string,needed:number,members:Member[],remember:(variantId:number,display:{title:string;sku:string;imageUrl:string})=>void,wanted:(productId:string)=>boolean=()=>true)=>{
     // Any newer call stops this walk; a call spends at most 4 s and the next call resumes.
@@ -89,14 +90,14 @@ export function createMemberSearch(api: ProductSearchApiContent | undefined) {
     const deadline=Date.now()+4000;
     const byVariant=new Map(members.filter(member=>member.variantId!=null).map(member=>[Number(member.variantId),member.productId]));
     let entry=cache.get(query);
-    if(!entry||entry.members!==byVariant.size)entry={ids:[],seen:new Set(),done:false,pages:0,members:byVariant.size};
+    if(!entry||entry.members!==byVariant.size)entry={ids:[],seen:new Set(),done:false,members:byVariant.size};
     cache.delete(query);cache.set(query,entry);
     while(cache.size>20)cache.delete(cache.keys().next().value!);
     // Count only hits the caller can show (its filter), so a filtered page is never falsely empty.
-    while(!entry.done&&entry.ids.filter(wanted).length<needed&&entry.pages<20&&byVariant.size&&generation===gen&&Date.now()<deadline){
+    while(!entry.done&&entry.ids.filter(wanted).length<needed&&byVariant.size&&generation===gen&&Date.now()<deadline){
       const result=await api.searchProducts({queryString:query,first:50,...(entry.cursor?{afterCursor:entry.cursor}:{})});
       if(generation!==gen)return null;
-      entry.pages++;entry.cursor=result.lastCursor;entry.done=!result.hasNextPage||!result.lastCursor;
+      entry.cursor=result.lastCursor;entry.done=!result.hasNextPage||!result.lastCursor;
       const products=result.items||[],bare=products.filter(product=>!product.variants?.length).map(product=>product.id);
       // Search results may omit variants; one bulk fetch fills them in.
       const full=bare.length?new Map((await api.fetchProductsWithIds(bare)).fetchedResources.map(product=>[product.id,product])):new Map();
@@ -105,7 +106,6 @@ export function createMemberSearch(api: ProductSearchApiContent | undefined) {
         if(productId&&!entry.seen.has(productId)){entry.seen.add(productId);entry.ids.push(productId);remember(variant.id,variantDisplay(variant as Variant,product));}
       }
     }
-    // A walk stopped by the page cap may have missed matches: it is not complete.
-    return {ids:entry.ids,complete:entry.done||!byVariant.size,capped:entry.pages>=20};
+    return {ids:entry.ids,complete:entry.done||!byVariant.size};
   };
 }
