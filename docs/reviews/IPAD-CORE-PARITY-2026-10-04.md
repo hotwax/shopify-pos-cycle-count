@@ -41,9 +41,37 @@ At the observation: **16 entries, 22,866 UTF-8 JSON bytes total**. The namespace
 - Control: 2,255 bytes. Mailbox: 118 bytes. These values are observed usage, not a promised fixed slot count.
 - The unchanged creation draft was verified: `Theft`, `DYNAMIC_COUNT`, start `2026-10-03`, due `2026-10-04`, empty product ID list. The inspector made no storage writes or deletions.
 
+## Native overflow journal and process recovery
+
+The clean implementation remains `82773c5`; PR head `67376ab` only added the earlier evidence. A dedicated third recovery session, **QA Event Capacity** (`POSI_8fea78a9f0fb7f9`), was created natively in `POSC_0a2026100400a11`.
+
+A 100-barcode Appium keyboard command took 131,556 ms and was interrupted by POS's two-minute idle PIN screen. Exactly 68 events and 68 OMS units were reconciled. This command does not establish a lost-event defect or real scanner throughput; native keyboard injection did not keep the register unlocked.
+
+A temporary control, restricted to this QA session, then called the existing native `enqueue` path 5,000 times with the real product barcode `MSH0232Black`. It used the candidate's lease guard, journal append, aggregation and real Demo OMS sync. This was programmatic journal stress on the physical POS extension, not external scanner proof. It accepted all 5,000 events; append/aggregation/attempted sync/inspection took 76,636 ms. The temporary control was removed and the component restored exactly before recovery testing; no diagnostic code was committed.
+
+The measured 5,068-event journal occupied **997,922 UTF-8 JSON bytes across three native KV values**:
+
+| Value | Bytes |
+| --- | ---: |
+| Root scan-events document | 55,856 |
+| Overflow `:more:1b` | 450,189 |
+| Overflow `:more:2b` | 491,877 |
+
+Each value was below the candidate's 900,000-byte working limit. This proves actual native overflow at this size, not store-wide exhaustion or interrupted migration.
+
+During the stress run, sync reported that the terminal no longer owned the session; the server still had 68 while local storage held 5,068. The OMS lease was expired when inspected. The exact timing/cause of the missed renewal was not isolated, so this is not declared a new refactor regression. After reopening the clean candidate, the terminal reacquired its lock, restored every local event and synced **5,068 units**, independently confirmed through the OMS items API.
+
+Native Undo then produced **5,067 units and 5,069 journal entries** (the reversal remains in history). OMS independently confirmed 5,067. The reversed event lost its Undo action; the newest reversal and matched rows displayed product images. A normal full POS process restart, verified unlock and reattachment to the same preview restored 5,067, all 5,069 events, terminal ownership and synced status. Scan-history paging changed from 1/127 to 2/127 and back. No second 5,000-event batch was attempted.
+
+[Clean native history after process recovery](evidence/native-capacity-recovered.png)
+
+## Network interruption limit
+
+Turning off iPad Wi-Fi made the development preview show the POS host's “Error loading extension” before any offline scan could be recorded. Wi-Fi was restored. The live tunnel/manifest were available, and a normal POS process restart plus preview reattachment recovered the clean app and existing recovery-session data. This does not prove a customer-installed offline defect or offline parity: the test involved the development preview/tunnel. No reset, reinstall or data clear was used. Offline scanning and pending background upload remain unfinished gates.
+
 ## Limits / remaining gates
 
-Not yet proven: native count creation and independently optional dates; cancellation through local preparation; measured per-scan layout movement; native shared-map-hit versus Solr call tracing; physical external/HID and actual camera scans; 2,000+ scope; native byte-boundary overflow/near-capacity/interrupted migration; offline reopen and foreground/background upload ownership. Existing automated crash-recovery tests are separate evidence.
+Not yet proven: native count creation and independently optional dates; cancellation through local preparation; measured per-scan layout movement; native shared-map-hit versus Solr call tracing; physical external/HID and actual camera scans; 2,000+ scope; store-wide near-capacity/interrupted migration; offline reopen and foreground/background upload ownership. Existing automated crash-recovery tests are separate evidence.
 
 The current Demo facility has 1,723 products and the countable variant query returned 1,770; no fabricated products or global inventory changes were made to inflate scope. A native PIN idle screen requires reinspection/reopen during long observations; it is not an expired signing/profile problem. No POS reset, reinstall, storage clear, customer deployment, merge, final approval or inventory adjustment occurred.
 
@@ -51,7 +79,7 @@ During the foreign-lock check, the session badge used “Lock needs recheck” w
 
 The immediate Back-on-open probe did not establish cancellation: the empty QA session finished opening before a stable cancelled summary was observed. Keep this gate unfinished; an Appium click acknowledgment alone is not proof that the opening route handled Back.
 
-Recovery fixture sessions remain in progress intentionally. This retains a usable QA counting session for further recovery/scan tests. A has `10101=2`; B has `10001=3` and `10101=1`. The parent has not been submitted for approval.
+Recovery fixture sessions remain in progress intentionally. This retains a usable QA counting session for further recovery/scan tests. A has `10101=2`; B has `10001=3` and `10101=1`; QA Event Capacity has `10101=5067`. The parent has not been submitted for approval.
 
 Harness observations were checked against fresh native UI: the hand search field is “Find an OMS product”, successful save feedback says “Counted” instead of “Ready to scan”, and HID history uses the scanned barcode rather than SKU. Waiting for the wrong labels caused test timeouts; those were not app regressions. Dismissing the numeric keyboard allowed navigation to an offscreen Back button.
 
