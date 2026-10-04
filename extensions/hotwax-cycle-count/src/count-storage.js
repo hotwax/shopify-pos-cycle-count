@@ -136,7 +136,10 @@ export class CountStorage {
    */
   async save(key, {header, records, keyOf, move = false, summary, retire = []}) {
     // After an ambiguous failure, learn what actually committed before writing again.
-    if (this.unsure.has(key)) await this.load(key);
+    const reloaded = this.unsure.has(key);
+    if (reloaded) await this.load(key);
+    // A reload parses new objects: match the caller's unchanged records by value then.
+    const same = (a, b) => a === b || (reloaded && a !== undefined && JSON.stringify(a) === JSON.stringify(b));
     const previous = this.docs.get(key) || {chunks: [], root: [], hw: 0, retire: []};
     retire = [...new Set([...(previous.retire || []), ...retire])];
     const where = new Map(), before = new Map();
@@ -148,13 +151,13 @@ export class CountStorage {
     // Records keep their value unless they are new, or moved back to the root on update.
     previous.chunks.forEach((chunk, index) => chunk.data.forEach(old => {
       const current = present.get(keyOf(old));
-      if (current === old) next[index].data.push(old);
+      if (same(current, old)) next[index].data.push(current);
       else {next[index].changed = true; if (current && !move) next[index].data.push(current);}
     }));
     for (const old of previous.root) {const current = present.get(keyOf(old)); if (current) root.push(current);}
     for (const record of records) {
       const id = keyOf(record), at = where.get(id);
-      if (at === undefined || (move && at >= 0 && before.get(id) !== record)) root.push(record);
+      if (at === undefined || (move && at >= 0 && !same(before.get(id), record))) root.push(record);
     }
     let hw = Math.max(previous.hw, ...next.map(chunk => chunk.n));
     const envelope = {format: FORMAT, stamp: '', header, ...(summary ? {summary} : {}), more: [], hw, data: []};
@@ -172,7 +175,8 @@ export class CountStorage {
       const chunk = next[i];
       if (!chunk.changed || total(chunk.data) <= LIMIT) continue;
       let bytes = 0, count = 0;
-      while (count < chunk.data.length - 1 && bytes + sized(chunk.data[count]) <= SEAL) bytes += sized(chunk.data[count++]);
+      const cut = Math.min(SEAL, total(chunk.data) / 2);
+      while (count < chunk.data.length - 1 && bytes + sized(chunk.data[count]) <= cut) bytes += sized(chunk.data[count++]);
       next.splice(i + 1, 0, {n: ++hw, slot: 'b', stamp: '', data: chunk.data.slice(count), changed: true});
       chunk.data = chunk.data.slice(0, count);
     }
@@ -184,13 +188,15 @@ export class CountStorage {
       if (chunk.data.length) {
         chunk.slot = chunk.slot === 'a' ? 'b' : 'a'; chunk.stamp = stamp;
         if (total(chunk.data) > LIMIT) throw new Error('A count record is too large to save on this device.');
-        writes.push([slotKey(key, chunk.n, chunk.slot), {format: FORMAT, of: key, stamp, data: chunk.data}]);
+        writes.push([chunk.n, slotKey(key, chunk.n, chunk.slot), {format: FORMAT, of: key, stamp, data: chunk.data}]);
       }
     }
     const value = {...envelope, stamp, hw, more: kept.map(({n, slot, stamp: chunkStamp}) => ({n, slot, stamp: chunkStamp})), data: root,
       ...(retire.length ? {retire} : {})};
     try {
-      for (const [slot, chunk] of writes) await this.native.set(slot, chunk);
+      // Ascending indices: an interrupted commit leaves a contiguous run past `hw` for sweep().
+      writes.sort((a, b) => a[0] - b[0]);
+      for (const [, slot, chunk] of writes) await this.native.set(slot, chunk);
       await this.native.set(key, value);
     } catch (error) {
       // A rejected write may still have been stored. Reconcile before retrying. Slots

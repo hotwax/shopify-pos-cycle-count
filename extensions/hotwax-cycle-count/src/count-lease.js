@@ -2,9 +2,10 @@ import {controlFor, readMailbox, storedLease} from './count-control';
 
 // Earlier releases stored each lease under its own key; it is moved into control on open.
 export const leaseKey = (owner,id) => `hotwax-count:${owner}:lease:${id}`;
-// Ownership is lost only when OMS says so. A timeout or an unreachable OMS
-// leaves the last confirmed lease in place until it expires.
-const ownershipLost = error => [401,403,409].includes(error?.status);
+// Ownership is lost only when OMS says another lease is active (leaseLost); that
+// fences every stored copy. A refusal (401/403/409) only pauses until a recheck,
+// and a timeout or an unreachable OMS keeps the confirmed lease until it expires.
+const refused = error => [401,403,409].includes(error?.status);
 export class CountLease {
   constructor(storage,owner,request,changed=()=>{},isOffline=()=>false) {
     this.native=storage.native||storage;this.control=controlFor(this.native,owner);this.owner=owner;this.request=request;this.changed=changed;this.isOffline=isOffline;
@@ -61,17 +62,24 @@ export class CountLease {
       if (!this.active||generation!==this.generation) return value;
       this.value=value;this.confirmed=true;await this.control.holdLease(this.sessionId,value);this.changed(value);return value;
     })().catch(async error=>{
-      // OMS says another terminal owns it now: fence every copy this device holds.
-      if(generation===this.generation&&ownershipLost(error)){this.confirmed=false;await this.forget().catch(()=>{});this.value={...this.value,owned:false};this.changed(this.value);}
+      if(generation===this.generation)await this.lost(error);
       throw error;
     }).finally(()=>{this.renewing=null;});
     return this.renewing;
+  }
+  /** Act on a failed lease check: pause on a refusal; fence every copy when OMS says another lease is active. */
+  async lost(error) {
+    if(!refused(error))return;
+    this.confirmed=false;
+    if(error.leaseLost){await this.forget().catch(()=>{});this.value={...this.value,owned:false};this.changed(this.value);}
   }
   async write(action,payload) {
     if(!this.active || !this.value?.owned)throw new Error('Recheck device ownership before syncing this session. Your scans are saved.');
     // The count adapter renews this exact lease in OMS before each write
     // (manageLease). OMS must still enforce ownership for other clients.
-    return this.request(action,{...payload,lease:this.value});
+    const generation=this.generation;
+    try {return await this.request(action,{...payload,lease:this.value});}
+    catch(error) {if(generation===this.generation&&error?.leaseLost)await this.lost(error);throw error;}
   }
   async release() {
     this.confirmed=false;++this.generation;

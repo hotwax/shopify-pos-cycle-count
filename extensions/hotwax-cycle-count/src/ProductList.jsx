@@ -24,26 +24,33 @@ function ProductListContent({items,disabled=false,directed=false,onSelect,select
   useEffect(()=>{if(memory)Object.assign(memory,{search,view,page,sort});},[search,view,page,sort,memory]);
   // With a query, Shopify search supplies relevance-ordered session products (by
   // variant); local matches on identifiers and known names follow.
-  const query=search.trim(),[remote,setRemote]=useState(null);
+  const query=search.trim(),[remote,setRemote]=useState(null),viewKey=countExtras&&view==='counted'?'countedAll':view;
   useEffect(()=>{
     if(!searchShop||!query){setRemote(null);return;}
     let stale=false;
     setRemote(old=>old?.query===query?{...old,loading:true}:{query,ids:[],complete:false,loading:true});
-    // Relevance pages as needed; any other sort applies to the whole result set, so walk it all.
-    searchShop(query,sort==='assigned'?(page+2)*PRODUCT_PAGE_SIZE:Infinity).then(found=>{if(!stale)setRemote(found?{query,...found,loading:false}:null);})
-      .catch(()=>{if(!stale)setRemote(old=>old&&{...old,complete:true,loading:false});});
+    // Relevance pages as needed; any other sort applies to the whole result set, so walk
+    // it all. Each call walks a few seconds; keep going until this view's page is filled.
+    const needed=sort==='assigned'?(page+2)*PRODUCT_PAGE_SIZE:Infinity,inView=new Set(index.current.list('',viewKey)),wanted=id=>inView.has(id);
+    (async()=>{
+      let found;
+      do found=await searchShop(query,needed,wanted);
+      while(!stale&&found&&!found.complete&&!found.capped&&found.ids.filter(wanted).length<needed);
+      if(!stale)setRemote(found?{query,...found,loading:false}:null);
+    })().catch(()=>{if(!stale)setRemote(old=>old&&{...old,complete:true,loading:false});});
     return()=>{stale=true;};
-  },[searchShop,query,page,sort,items.length]);
+  },[searchShop,query,page,sort,viewKey,items.length]);
   const result=useMemo(()=>{
-    const list=index.current,viewKey=countExtras&&view==='counted'?'countedAll':view;
+    const list=index.current;
     list.update(items);
-    if(!remote||remote.query!==query)return list.page(search,viewKey,page,sort);
+    if(!remote||remote.query!==query){const shown=list.page(search,viewKey,page,sort);return {...shown,prefetch:list.page(search,viewKey,page+1,sort).items};}
     // Exact identifier or barcode matches first, then Shopify relevance, then other local matches.
     const inView=new Set(list.list('',viewKey)),ordered=[...list.exact(search).filter(id=>inView.has(id)),...remote.ids.filter(id=>inView.has(id))];
-    const shown=new Set(ordered),ids=[...shown,...list.list(search,viewKey).filter(id=>!shown.has(id))];
-    return list.slice(list.sort(ids,sort),page);
-  },[items,search,view,page,sort,countExtras,remote]);
-  useEffect(()=>{onVisible?.(result.items);},[result.items,onVisible]);
+    const shown=new Set(ordered),ids=list.sort([...shown,...list.list(search,viewKey).filter(id=>!shown.has(id))],sort);
+    return {...list.slice(ids,page),prefetch:list.slice(ids,page+1).items};
+  },[items,search,viewKey,page,sort,remote]);
+  // Hydrate the rendered page plus the next one.
+  useEffect(()=>{onVisible?.([...result.items,...(result.page===page?result.prefetch:[])]);},[result.items,onVisible]);
   const views=[['all','All'],['uncounted','Uncounted'],['counted','Counted'],...(directed?[['undirected','Extra']]:[])];
   return <s-stack direction="block" gap="base">
     <s-text-field label="Find a product" placeholder="Name, SKU or barcode" value={search} onInput={e=>{const value=e.currentTarget.value;clearTimeout(timer.current);timer.current=setTimeout(()=>{setSearch(value);setPage(0);},180);}}/>

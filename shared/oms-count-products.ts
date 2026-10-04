@@ -3,7 +3,10 @@ import {OmsConnection, OmsLookupError, rows, text, type OmsRow} from './oms-conn
 /** `shopId` is the HotWax ShopifyShop ID, used to read this shop's variant mapping. */
 export type ProductPreferences = {barcode: string; primary: string; secondary: string; shopId?: string};
 export const COUNTABLE_FILTERS = ['docType:PRODUCT','isVirtual:false','productTypeId:FINISHED_GOOD','-prodCatalogCategoryTypeIds:PCCT_DISCONTINUED'];
-const fields = 'productId,productName,title,internalName,goodIdentifications,sku,upc,groupName,groupId,parentProductName,mainImageUrl,smallImageUrl,mediumImageUrl,primaryProductCategoryName';
+const fields = 'productId,productName,title,internalName,goodIdentifications,sku,upc,groupName,groupId,parentProductName,mainImageUrl,smallImageUrl,mediumImageUrl,primaryProductCategoryName,isVirtual,productTypeId,prodCatalogCategoryTypeIds';
+/** The same rule as COUNTABLE_FILTERS, for documents found without them; missing fields fail closed. */
+const countable = (product: OmsRow) => product.isVirtual !== true && String(product.isVirtual) !== 'true' && product.productTypeId === 'FINISHED_GOOD' &&
+  !(Array.isArray(product.prodCatalogCategoryTypeIds) ? product.prodCatalogCategoryTypeIds : [product.prodCatalogCategoryTypeIds]).includes('PCCT_DISCONTINUED');
 const phrase = (value: string) => JSON.stringify(value);
 const escapeTerm = (value: string) => value.replace(/([+\-!(){}\[\]^"~*?:\\/|&])/g,'\\$1');
 
@@ -41,7 +44,7 @@ export function presentProduct(product: OmsRow, prefs: ProductPreferences) {
     sku:text(ids.find(i=>i.type==='SKU')?.value||product.internalName||id),
     primary:resolve(prefs.primary)||resolve('SKU')||id,secondary:resolve(prefs.secondary)||id,
     imageUrl:text(product.smallImageUrl||product.mediumImageUrl||product.mainImageUrl),
-    codes:ids.filter(i=>i.type===prefs.barcode).map(i=>i.value),...(shopifyVariantId?{shopifyVariantId}:{})};
+    codes:ids.filter(i=>i.type===prefs.barcode).map(i=>i.value),...(shopifyVariantId?{shopifyVariantId}:{}),countable:countable(product)};
 }
 async function search(oms: OmsConnection, query: OmsRow) {
   const result=await oms.postRead('/rest/s1/admin/search/query',{collection:'enterpriseSearch',...query});
@@ -60,7 +63,8 @@ export async function catalogPage(payload: OmsRow, prefs: ProductPreferences, om
   const result=await search(oms,{query,filter,fields,params:{rows:40,start:page*40,defType:'edismax',qf:'sku^100 upc^100 productName^50 internalName^40 productId groupName',sort:'productId asc'},
     ...(payload.facets?{facet:{tags:{type:'terms',field:'tags',limit:1000}}}:{})});
   const facets=result.facets?.tags as OmsRow|undefined;
-  return {items:result.docs.map(p=>presentProduct(p,prefs)),total:result.total,pageIndex:page,nextPage:(page+1)*40<result.total?page+1:null,
+  // Every filtered search below found only countable products.
+  return {items:result.docs.map(p=>({...presentProduct(p,prefs),countable:true})),total:result.total,pageIndex:page,nextPage:(page+1)*40<result.total?page+1:null,
     tags:rows(facets?.buckets).map(b=>({value:text(b.val),count:Number(b.count)}))};
 }
 export async function countableProducts(ids: string[], prefs: ProductPreferences, oms: OmsConnection, scope=false) {
@@ -68,7 +72,7 @@ export async function countableProducts(ids: string[], prefs: ProductPreferences
   for(let offset=0;offset<ids.length;offset+=200){
     const batch=ids.slice(offset,offset+200);
     const found=await search(oms,{query:'*:*',filter:[...COUNTABLE_FILTERS,...(scope?['isVariant:true']:[]),`productId:(${batch.map(phrase).join(' OR ')})`],fields,params:{rows:batch.length}});
-    for(const row of found.docs)result.set(text(row.productId),presentProduct(row,prefs));
+    for(const row of found.docs)result.set(text(row.productId),{...presentProduct(row,prefs),countable:true});
   }
   if(ids.some(id=>!result.has(id)))throw new OmsLookupError('A selected OMS product is unavailable, discontinued, virtual or not countable. Refresh the product list.',409);
   return result;
@@ -88,7 +92,7 @@ export async function matchCodes(codes: string[], prefs: ProductPreferences, oms
     if(found.length!==1)errors.push({code,message:found.length?'This barcode matches more than one OMS product. Select the correct product.':'No countable OMS product matches this barcode. Find the product to match it.'});
     else {
       const shopifyVariantId=shopifyVariantOf(identifications(found[0]),prefs.shopId);
-      matches.push(identityOnly?{code,productId:text(found[0].productId),codes:[code],...(shopifyVariantId?{shopifyVariantId}:{})}:{code,...presentProduct(found[0],prefs)});
+      matches.push(identityOnly?{code,productId:text(found[0].productId),codes:[code],countable:true,...(shopifyVariantId?{shopifyVariantId}:{})}:{code,...presentProduct(found[0],prefs),countable:true});
     }
   }
   return {matches,errors};

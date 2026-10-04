@@ -48,7 +48,7 @@ test('a released or lost lease is fenced in both runtimes and never authorizes o
   const claim = new CountLease(kv.native, owner, async () => {if (reply instanceof Error) throw reply; return reply;}, () => {}, () => false);
   await claim.open('S1');
   assert.equal(claim.canScan('S1', 'POS_1'), true);
-  reply = Object.assign(new Error('This device no longer owns the session.'), {status: 409});
+  reply = Object.assign(new Error('This device no longer owns the session.'), {status: 409, leaseLost: true});
   await assert.rejects(claim.renew(), /no longer owns/);
   const offline = new CountLease(kv.native, owner, async () => lease, () => {}, () => true);
   await offline.open('S1', true);
@@ -104,6 +104,18 @@ test('a variant already mapped to HotWax skips the HotWax lookup; another OMS co
   await other.load({shop: '1', oms: 'https://b.example'});
   assert.equal(other.get(20), undefined);
   assert.equal(kv.value(IDENTITY_KEY).format, 'hotwax-count-3');
+});
+
+test('only countable HotWax products are paired with their Shopify variant', async () => {
+  const kv = fakeKV(), identity = new IdentityMap(new CountStorage(kv.native));
+  await identity.load({shop: '1', oms: 'https://a.example'});
+  const state = new CountState(kv.native, owner, lookup, () => {}, {}, () => {}, {identity});
+  await state.open(count('S1', [
+    {productId: 'DISCONTINUED', sku: 'D', quantity: null, shopifyVariantId: 31, countable: false},
+    {productId: 'ACTIVE', sku: 'A', quantity: null, shopifyVariantId: 32, countable: true},
+  ]));
+  assert.equal(identity.get(31), undefined); assert.equal(identity.get(32), 'ACTIVE');
+  assert.equal(state.items.items.DISCONTINUED.variantId, 31);
 });
 
 test('product search keeps paging past pages without session products and reports when the results are complete', async () => {

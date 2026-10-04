@@ -64,11 +64,14 @@ export function CountWorkspace({owner,setHeader}) {
   // Journal access waits for the background uploader; showing counts does not.
   const foreground=useRef(null),pruning=useRef(Promise.resolve()),removal=useRef(Promise.resolve()),opened=useRef(false),cancelOpen=useRef(null);
   async function migrateSaved() {
-    for(const entry of (await control.read()).catalogue){
+    // Oldest first: each open moves its session to the front, which rebuilds the
+    // newest-first order (an interrupted pass is completed the same way next time).
+    for(const entry of [...(await control.read()).catalogue].reverse()){
       if(!own()||opened.current)return;
       const [items,events]=[await storage.metadata(entry.itemKey),await storage.metadata(entry.eventKey)];
       if(!items.legacy&&!events.legacy)continue;
-      const saved=await readSavedSession(storage,entry).catch(()=>null);
+      let saved;
+      try {saved=await readSavedSession(storage,entry);} catch {continue;}
       if(!saved||!own()||opened.current)continue;
       const state=new CountState(storage,owner,()=>Promise.reject(new Error('Migration does not contact HotWax.')),()=>{},saved.audit||{},()=>{},{control});
       await (removal.current=state.open(saved)).catch(()=>{});
@@ -76,11 +79,11 @@ export function CountWorkspace({owner,setHeader}) {
   }
   const hydrateRows=useCallback(rows=>{engine.current?.hydrate(rows.map(row=>row.variantId)).catch(()=>{});},[]);
   // Product search through Shopify, limited to this session's products by variant.
-  const searchMembers=useCallback((query,needed)=>{
+  const searchMembers=useCallback((query,needed,wanted)=>{
     const state=engine.current;
     // Product search is not available offline; local matches still show.
     if(!state||shopify.connectivity.current.value.internetConnected!=='Connected')return Promise.resolve(null);
-    return services.current.search(query,needed,state.itemList,(variantId,display)=>state.rememberVariant(variantId,display));
+    return services.current.search(query,needed,state.itemList,(variantId,display)=>state.rememberVariant(variantId,display),wanted);
   },[]);
   const listMemory=useRef({search:'',view:'all',page:0});
   const selectProduct=useCallback(item=>{setProductId(item.productId);go('product');},[]);
@@ -268,7 +271,9 @@ export function CountWorkspace({owner,setHeader}) {
   useEffect(()=>{
     // Counts load immediately. Only journal work (attach) waits for a background
     // upload that is already in flight to finish.
-    foreground.current=enterForeground(shopify.storage,owner);
+    // Converting control first frees the earlier release's status key, so even a
+    // full register has room for the coordination flag.
+    foreground.current=control.read(true).catch(()=>{}).then(()=>enterForeground(shopify.storage,owner));
     foreground.current.catch(()=>{});
     (async()=>{
       if(shopify.product?.variantId)try{const selected=await request('contextProduct',{variantId:shopify.product.variantId});if(own()){context.current=selected;setContextProduct(selected);}}catch(failure){if(own())setError(message(failure));}
@@ -317,9 +322,9 @@ export function CountWorkspace({owner,setHeader}) {
       const current=latest.current;if(!own()||!current.count)return;
       setLeaseNow(Date.now());
       // The tile's status lives in control: write it when it changes, or once a minute to stay fresh.
-      const next={sessionId:current.count.sessionId,name:current.count.name,
-        pending:(current.stats?.pending||0)+(current.stats?.dirty||0),unmatched:current.stats?.pending||0,
-        state:!current.connected?'offline':current.stats?.pending?'attention':current.stats?.dirty?'pending':current.count.editable?'counting':'submitted'};
+      const {pending=0,dirty=0}=current.stats||{};
+      const next={sessionId:current.count.sessionId,name:current.count.name,pending:pending+dirty,unmatched:pending,
+        state:!current.connected?'offline':pending?'attention':dirty?'pending':current.count.editable?'counting':'submitted'};
       control.update(state=>state.status&&Date.now()-state.status.at<60000&&['sessionId','state'].every(field=>state.status[field]===next[field])
         ?null:{...state,status:{...next,at:Date.now()}}).catch(()=>{});
     },5000);

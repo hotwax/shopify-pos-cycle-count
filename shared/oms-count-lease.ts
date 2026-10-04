@@ -8,6 +8,8 @@ export function leaseDevice(value: unknown) {
   if (!/^POS_[A-Za-z0-9_-]{1,36}$/.test(id)) throw new OmsLookupError('This register could not be identified. Reopen Cycle Count.', 400);
   return id;
 }
+/** OMS reports that this terminal's lease is no longer the active one. */
+export const leaseLost = (message: string) => Object.assign(new OmsLookupError(message, 409), {leaseLost: true});
 export async function sessionLease(id: string, oms: OmsConnection) {
   const result = rows(await oms.get(`${path(id)}/lock?${new URLSearchParams({pageSize:'100',orderByField:'-fromDate'})}`));
   return activeSessionLease(result);
@@ -37,7 +39,7 @@ export async function manageLease(action: string, id: string, user: string, devi
   const same = current && supplied && millis(current.fromDate)===millis(supplied.fromDate) &&
     text(current.deviceId)===device && text(current.userId)===user;
   if (action === 'leaseRelease' && !same) return {released:false};
-  if (!same) throw new OmsLookupError('This device no longer owns the session. Your scans are saved. Reconnect to check ownership before syncing.',409);
+  if (!same) throw leaseLost('This device no longer owns the session. Your scans are saved. Reconnect to check ownership before syncing.');
   if (action === 'leaseRelease') {
     await oms.mutate(`${path(id)}/release`,{fromDate:current!.fromDate,thruDate:Date.now()},'PUT');
     return {released:true};
@@ -48,6 +50,6 @@ export async function manageLease(action: string, id: string, user: string, devi
     lastHeartbeatAt:Date.now(),leaseSeconds:LEASE_SECONDS},'PUT');
   const renewed = await sessionLease(id,oms);
   if (!renewed || millis(renewed.fromDate)!==millis(current!.fromDate) || text(renewed.deviceId)!==device || text(renewed.userId)!==user)
-    throw new OmsLookupError('Device ownership changed while reconnecting. Your local scans are retained.',409);
+    throw leaseLost('Device ownership changed while reconnecting. Your local scans are retained.');
   return describe(renewed,user,device);
 }

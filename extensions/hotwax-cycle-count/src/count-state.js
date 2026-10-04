@@ -29,7 +29,9 @@ export class CountState {
     this.tail = Promise.resolve(); this.active = true; this.failures = new Map(); this.enriching = new Map();
     // Runtime only: HotWax display by product, Shopify display by variant, and the
     // variant a scan resolved to before its next journal commit saves it.
-    this.omsDisplay = new Map(); this.shopDisplay = new Map(); this.scanVariants = new Map(); this.missing = new Map();
+    // This count's own products keep their HotWax display for the whole session;
+    // other products share a bounded cache.
+    this.memberDisplay = new Map(); this.omsDisplay = new Map(); this.shopDisplay = new Map(); this.scanVariants = new Map(); this.missing = new Map();
     this.views = new WeakMap(); this.displayVersion = 0; this.memo = {}; this.retire = {events: [], items: []};
     this.eventKey = `hotwax-count:${owner}:scan-events`;
     this.itemKey = `hotwax-count:${owner}:count-items`;
@@ -55,15 +57,20 @@ export class CountState {
   /** Keep HotWax display for a product in memory. `pair` also records its
    * Shopify variant in the shared map; only countable HotWax search results and
    * this count's own products are trusted for that. */
-  remember(product, pair = false) {
-    if (!product?.productId) return;
-    const old = this.omsDisplay.get(product.productId), next = {...old};
+  remember(product, pair, member) {
+    const id = product && product.productId;
+    if (!id) return;
+    if (member == null) member = !!(this.items && this.items.items[id]);
+    const old = this.displayOf(id), next = {...old};
     for (const field of DISPLAY_FIELDS) if (product[field]) next[field] = product[field];
-    if (this.count?.canViewOnHand && product.onHand != null) next.onHand = product.onHand;
-    remember(this.omsDisplay, product.productId, next);
-    if (pair && product.shopifyVariantId != null) this.identity?.add(product.shopifyVariantId, product.productId);
+    if (this.count && this.count.canViewOnHand && product.onHand != null) next.onHand = product.onHand;
+    if (member || this.memberDisplay.has(id)) {this.omsDisplay.delete(id); this.memberDisplay.set(id, next);}
+    else remember(this.omsDisplay, id, next);
+    // Only products HotWax reports as countable may answer a later scan without its lookup.
+    if (pair && product.countable === true && product.shopifyVariantId != null && this.identity) this.identity.add(product.shopifyVariantId, id);
     this.displayVersion++;
   }
+  displayOf(productId) {return this.memberDisplay.get(productId) ?? this.omsDisplay.get(productId);}
   rememberVariant(variantId, display) {
     if (variantId == null || !display) return;
     remember(this.shopDisplay, Number(variantId), {title: display.title, sku: display.sku, imageUrl: display.imageUrl});
@@ -73,13 +80,13 @@ export class CountState {
    * HotWax for its identifiers, and the saved identifier as the placeholder. */
   view(item) {
     if (!item) return item;
-    const oms = this.omsDisplay.get(item.productId), shop = item.variantId != null ? this.shopDisplay.get(item.variantId) : undefined;
+    const oms = this.displayOf(item.productId), shop = item.variantId != null ? this.shopDisplay.get(item.variantId) : undefined;
     const cached = this.views.get(item);
     if (cached && cached.oms === oms && cached.shop === shop) return cached.view;
-    const fallback = item.productIdentifier || item.productId;
-    const onHand = this.count?.canViewOnHand ? oms?.onHand : undefined;
-    const view = {...item, title: shop?.title || oms?.title || fallback, sku: oms?.sku || shop?.sku || fallback,
-      primary: oms?.primary || shop?.sku || fallback, secondary: oms?.secondary || item.productId, imageUrl: shop?.imageUrl || oms?.imageUrl,
+    const fallback = item.productIdentifier || item.productId, o = oms || {}, s = shop || {};
+    const onHand = this.count && this.count.canViewOnHand ? o.onHand : undefined;
+    const view = {...item, title: s.title || o.title || fallback, sku: o.sku || s.sku || fallback,
+      primary: o.primary || s.sku || fallback, secondary: o.secondary || item.productId, imageUrl: s.imageUrl || o.imageUrl,
       ...(onHand != null ? {onHand, delta: item.quantity == null ? null : item.quantity - onHand} : {})};
     this.views.set(item, {oms, shop, view});
     return view;
@@ -104,7 +111,8 @@ export class CountState {
     const now = Date.now();
     const ids = [...new Set(variantIds.filter(id => id != null).map(Number))]
       .filter(id => !this.shopDisplay.has(id) && !(this.missing.get(id) > now)).slice(0, 100);
-    if (!ids.length || !this.request.variants) return;
+    // Display found elsewhere (product search) still reaches the rendered rows.
+    if (!ids.length || !this.request.variants) {if (this.items && this.notifiedVersion !== this.displayVersion) this.notify(); return;}
     for (let i = 0; i < ids.length; i += 50) {
       const found = await this.request.variants(ids.slice(i, i + 50)).catch(() => null);
       if (!found || !this.active) return;
@@ -156,7 +164,7 @@ export class CountState {
         return slimEvent({...event, productId: event.productId ?? event.product?.productId, variantId: event.variantId ?? variantId});
       }) : eventsDoc?.records || [];
       const legacyRecords = itemsDoc?.legacy ? itemsDoc.records : [];
-      for (const item of legacyRecords) {this.remember(item); if (item.shopifyVariantId != null) this.rememberVariant(item.shopifyVariantId, item);}
+      for (const item of legacyRecords) {this.remember(item, false, true); if (item.shopifyVariantId != null) this.rememberVariant(item.shopifyVariantId, item);}
       const itemRecords = itemsDoc?.legacy ? legacyRecords.map(item => slimItem({...item, variantId: item.variantId ?? item.shopifyVariantId})) : itemsDoc?.records || [];
       const items = {...(itemsDoc?.header || {version: 2, sessionId: count.sessionId, applied: {}}), items: Object.fromEntries(itemRecords.map(item => [item.productId, item]))};
       // Version 1 processed strictly in order and used a per-product watermark.
@@ -194,7 +202,7 @@ export class CountState {
       let seq = itemRecords.reduce((max, item) => Math.max(max, item.seq || 0), 0);
       for (const id of Object.keys(items.items)) if (items.items[id].seq == null) items.items[id] = {...items.items[id], seq: ++seq};
       for (const detail of count.items) {
-        this.remember(detail, true);
+        this.remember(detail, true, true);
         const old = items.items[detail.productId], variantId = detail.shopifyVariantId ?? old?.variantId;
         if (!old) items.items[detail.productId] = slimItem({seq: ++seq, productId: detail.productId, variantId, productIdentifier: detail.sku || detail.productId,
           codes: codesOf(detail.codes || []), quantity: detail.quantity, isRequested: detail.isRequested, lastUpdatedAt: detail.lastUpdatedAt || 0,
@@ -292,20 +300,12 @@ export class CountState {
     const code = String(job.code || '').trim();
     if (!code || code.length > 255 || /[\x00-\x1f]/.test(code)) throw new Error('Enter a valid barcode or SKU.');
     if (job.source === 'correction' && (!Number.isSafeInteger(job.quantity) || job.quantity < 0 || job.quantity > 1000000)) throw new Error('Enter a whole quantity between 0 and 1,000,000.');
+    // Undo events are written only by undoScan, which checks what they reverse.
     const event = slimEvent({scannedValue: code, productId: job.productId || null,
-      negatedScanEventId: job.negatedScanEventId || null,
-      quantity: job.source === 'correction' ? job.quantity : job.source === 'undo' ? -1 : (job.quantity ?? 1),
+      quantity: job.source === 'correction' ? job.quantity : (job.quantity ?? 1),
       mode: job.source === 'correction' ? 'set' : 'add', source: job.source,
       createdAt: Date.now(), aggApplied: 0, staffId:this.audit.staffId,deviceId:this.audit.deviceId});
-    if (job.source === 'undo') {
-      const original = events.events.find(e => e.id === event.negatedScanEventId);
-      if (!original || original.aggApplied !== 1 || original.quantity <= 0 || original.mode !== 'add' ||
-        events.events.some(e => e.negatedScanEventId === original.id) ||
-        (this.items.items[original.productId]?.lastCorrectionId || 0) >= original.id)
-        throw new Error('This scan can no longer be undone. Correct the product quantity instead.');
-      event.productId = original.productId; event.scannedValue = original.scannedValue; event.quantity=-original.quantity;
-    }
-    if(!Number.isSafeInteger(event.quantity)||Math.abs(event.quantity)>1000000||(event.mode==='add'&&event.source!=='undo'&&event.quantity<=0))throw new Error('Enter a whole quantity from 1 to 1,000,000.');
+    if(!Number.isSafeInteger(event.quantity)||Math.abs(event.quantity)>1000000||(event.mode==='add'&&event.quantity<=0))throw new Error('Enter a whole quantity from 1 to 1,000,000.');
     if (job.product) this.remember(job.product);
     return {id: events.nextId++, ...event};
   }
@@ -381,20 +381,19 @@ export class CountState {
             if (applied) events.events[index] = applied;
             if (!applied || applied.aggApplied !== 0) continue;
             if (!items.applied[event.id]) {
-              const old = items.items[product.productId];
+              const old = items.items[product.productId] || {}, corrected = old.lastCorrectionId || 0;
               // A late match before a later explicit correction must not change that correction.
-              const superseded = (old?.lastCorrectionId || 0) > event.id;
-              const quantity = superseded ? old.quantity : event.mode === 'set' ? event.quantity : (old?.quantity || 0) + event.quantity;
+              const quantity = corrected > event.id ? old.quantity : event.mode === 'set' ? event.quantity : (old.quantity || 0) + event.quantity;
               // Keep only this scan pending with a reason; the rest of the batch still commits.
               if (!Number.isSafeInteger(quantity) || quantity < 0 || quantity > 1000000) {rejected.push(event.id); continue;}
-              items.items[product.productId] = slimItem({...old, seq: old?.seq ?? ++this.seq, productId: product.productId,
-                variantId: old?.variantId ?? product.shopifyVariantId ?? this.variantOf(applied),
-                isRequested: old?.isRequested ?? this.count.countType !== 'DIRECTED_COUNT',
-                productIdentifier: event.scannedValue, codes: codesOf([...(old?.codes || []), event.scannedValue]),
+              items.items[product.productId] = slimItem({...old, seq: old.seq ?? ++this.seq, productId: product.productId,
+                variantId: old.variantId ?? product.shopifyVariantId ?? this.variantOf(applied),
+                isRequested: old.isRequested ?? this.count.countType !== 'DIRECTED_COUNT',
+                productIdentifier: event.scannedValue, codes: codesOf([...(old.codes || []), event.scannedValue]),
                 quantity, lastUpdatedAt: Date.now(),
                 // Revisions count commits, not event IDs: late matches must remain dirty.
-                revision: (old?.revision || 0) + 1, syncedRevision: old?.syncedRevision || 0, serverQuantity: old?.serverQuantity ?? null,
-                lastCorrectionId: event.mode === 'set' ? Math.max(old?.lastCorrectionId || 0, event.id) : old?.lastCorrectionId || 0});
+                revision: (old.revision || 0) + 1, syncedRevision: old.syncedRevision || 0, serverQuantity: old.serverQuantity ?? null,
+                lastCorrectionId: event.mode === 'set' ? Math.max(corrected, event.id) : corrected});
               items.applied[event.id] = true;
             }
             applied.productId = product.productId; applied.aggApplied = 1;
@@ -406,6 +405,8 @@ export class CountState {
           for (const id of rejected) this.failures.set(id, {message: 'This scan would take the product total outside 0 to 1,000,000. Remove it or correct the quantity.',
             attempts: (this.failures.get(id)?.attempts || 0) + 1, retryAt: Date.now() + 60000});
           this.identity?.schedule();
+          // Products new to the count keep their display for the session.
+          for (const {product} of resolved) if (this.items.items[product.productId]) this.remember(product, false, true);
           this.reindex(); this.notify();
         });
         else this.notify();
@@ -483,6 +484,11 @@ export class CountState {
       await this.save('items', items); this.items = items; this.notify();
     });
   }
+  /** A matched scan that adds units, not yet reversed or replaced by a later correction. */
+  undoable(e, negated) {
+    const item = this.items.items[e.productId];
+    return e.aggApplied === 1 && e.mode === 'add' && e.quantity > 0 && !negated.has(e.id) && (item && item.lastCorrectionId || 0) < e.id;
+  }
   lastUndoable() {
     const memo = this.memo.undo;
     if (memo?.events === this.events.events && memo.items === this.items.items) return memo.event;
@@ -490,8 +496,7 @@ export class CountState {
     let found;
     for (let i = this.events.events.length - 1; i >= 0; i--) {
       const event = this.events.events[i];
-      if (event.aggApplied === 1 && event.mode === 'add' && event.quantity > 0 && !negated.has(event.id) &&
-          (this.items.items[event.productId]?.lastCorrectionId || 0) < event.id) {found = event; break;}
+      if (this.undoable(event, negated)) {found = event; break;}
     }
     this.memo.undo = {events: this.events.events, items: this.items.items, event: found};
     return found;
@@ -515,7 +520,7 @@ export class CountState {
       const own=this.display(e),item=this.items.items[e.productId]&&this.view(this.items.items[e.productId]);
       return {...e,variantId:this.variantOf(e)??item?.variantId,title:own?.title||item?.title||e.scannedValue,imageUrl:own?.imageUrl||item?.imageUrl,
         matchingFailed:this.failures.has(e.id),
-        canUndo:e.aggApplied===1&&e.mode==='add'&&e.quantity>0&&!negated.has(e.id)&&(this.items.items[e.productId]?.lastCorrectionId||0)<e.id};
+        canUndo:this.undoable(e,negated)};
     })};
   }
   /**
@@ -568,18 +573,12 @@ export class CountState {
       const selected=this.events.events.find(e=>e.id===id);
       if(!selected)throw new Error('This scan is no longer available.');
       const {negated}=this.journalIndex();
-      const targets=this.events.events.filter(e=>(all?e.productId===selected.productId:e.id===id)&&e.aggApplied===1&&e.mode==='add'&&e.quantity>0&&!negated.has(e.id)&&(this.items.items[e.productId]?.lastCorrectionId||0)<e.id);
+      const targets=this.events.events.filter(e=>(all?e.productId===selected.productId:e.id===id)&&this.undoable(e,negated));
       if(!targets.length)throw new Error('These scans have already been reversed or replaced by a quantity correction.');
       const events={...this.events,events:[...this.events.events]};
       for(const original of targets)events.events.push(slimEvent({id:events.nextId++,scannedValue:original.scannedValue,productId:original.productId,negatedScanEventId:original.id,quantity:-original.quantity,mode:'add',source:'undo',createdAt:Date.now(),aggApplied:0,staffId:this.audit.staffId,deviceId:this.audit.deviceId}));
       await this.commitEvents(events);this.notify();
     });
-    await this.aggregate();
-  }
-  async undoLast() {
-    const event = this.lastUndoable();
-    if (!event) throw new Error('There is no recent scan to undo.');
-    await this.append({code: event.scannedValue, productId: event.productId, source: 'undo', negatedScanEventId: event.id});
     await this.aggregate();
   }
   async prepareSubmission() {

@@ -81,18 +81,21 @@ type Member={productId:string;variantId?:number};
  */
 export function createMemberSearch(api: ProductSearchApiContent | undefined) {
   const cache=new Map<string,{ids:string[];seen:Set<string>;cursor?:string;done:boolean;pages:number;members:number}>();
-  let latest='';
-  return async (query:string,needed:number,members:Member[],remember:(variantId:number,display:{title:string;sku:string;imageUrl:string})=>void)=>{
+  let generation=0;
+  return async (query:string,needed:number,members:Member[],remember:(variantId:number,display:{title:string;sku:string;imageUrl:string})=>void,wanted:(productId:string)=>boolean=()=>true)=>{
+    // Any newer call stops this walk; a call spends at most 4 s and the next call resumes.
+    const gen=++generation;
     if(!api||!query)return null;
-    // A newer query stops this walk; a call spends at most 4 s and the next call resumes.
-    latest=query;const deadline=Date.now()+4000;
+    const deadline=Date.now()+4000;
     const byVariant=new Map(members.filter(member=>member.variantId!=null).map(member=>[Number(member.variantId),member.productId]));
     let entry=cache.get(query);
     if(!entry||entry.members!==byVariant.size)entry={ids:[],seen:new Set(),done:false,pages:0,members:byVariant.size};
     cache.delete(query);cache.set(query,entry);
     while(cache.size>20)cache.delete(cache.keys().next().value!);
-    while(!entry.done&&entry.ids.length<needed&&entry.pages<20&&byVariant.size&&latest===query&&Date.now()<deadline){
+    // Count only hits the caller can show (its filter), so a filtered page is never falsely empty.
+    while(!entry.done&&entry.ids.filter(wanted).length<needed&&entry.pages<20&&byVariant.size&&generation===gen&&Date.now()<deadline){
       const result=await api.searchProducts({queryString:query,first:50,...(entry.cursor?{afterCursor:entry.cursor}:{})});
+      if(generation!==gen)return null;
       entry.pages++;entry.cursor=result.lastCursor;entry.done=!result.hasNextPage||!result.lastCursor;
       const products=result.items||[],bare=products.filter(product=>!product.variants?.length).map(product=>product.id);
       // Search results may omit variants; one bulk fetch fills them in.
@@ -102,6 +105,7 @@ export function createMemberSearch(api: ProductSearchApiContent | undefined) {
         if(productId&&!entry.seen.has(productId)){entry.seen.add(productId);entry.ids.push(productId);remember(variant.id,variantDisplay(variant as Variant,product));}
       }
     }
-    return {ids:entry.ids,complete:entry.done||entry.pages>=20||!byVariant.size};
+    // A walk stopped by the page cap may have missed matches: it is not complete.
+    return {ids:entry.ids,complete:entry.done||!byVariant.size,capped:entry.pages>=20};
   };
 }

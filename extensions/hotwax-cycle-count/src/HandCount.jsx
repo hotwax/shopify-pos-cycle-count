@@ -17,7 +17,7 @@ export function HandCount({request,engine,storage,owner,count,done,disabled=fals
   const control=controlFor(storage.native||storage,owner),sessionId=count.sessionId;
   // A draft product with the display this runtime knows (Shopify, then HotWax).
   const productOf=entry=>({...engine.view({productId:entry.productId,variantId:entry.variantId,productIdentifier:entry.identifier}),
-    shopifyVariantId:entry.variantId,identifier:entry.identifier});
+    shopifyVariantId:entry.variantId,identifier:entry.identifier,restored:true});
   const operation=useRef(''),active=useRef(true),current=useRef([]),queue=useRef(Promise.resolve()),timer=useRef(null),running=useRef(false),completed=useRef(false),ready=useRef(false),lockedRef=useRef(false),blocked=useRef(true),searchMemory=useRef({search:'',page:0});
   blocked.current=disabled||busy||locked;
   // Serialize draft snapshots so a slower earlier write cannot erase later edits.
@@ -31,17 +31,29 @@ export function HandCount({request,engine,storage,owner,count,done,disabled=fals
     active.current=true;
     // An earlier release saved full product objects under its own key: keep their
     // display in memory and move the compact draft into control.
-    control.adopt('drafts',sessionId,'hand-draft',legacy=>{legacy.entries.forEach(entry=>engine.remember(entry.product));return {...legacy,entries:compact(legacy.entries)};}).then(async value=>{
+    control.adopt('drafts',sessionId,'hand-draft',legacy=>{legacy.entries.forEach(entry=>engine.remember(entry.product));return {...legacy,entries:compact(legacy.entries)};}).then(value=>{
       if(!active.current||!value)return;
-      const missing=value.entries.filter(entry=>!engine.omsDisplay.has(entry.productId)).map(entry=>entry.productId);
-      await Promise.all([engine.hydrate(value.entries.map(entry=>entry.variantId)),
-        missing.length&&request('products',{productIds:missing.slice(0,200)}).then(result=>result.items.forEach(product=>engine.remember(product))).catch(()=>{})]);
-      if(!active.current)return;
       operation.current=value.id;current.current=value.entries.map(entry=>({product:productOf(entry),quantity:String(entry.quantity)}));setEntries(current.current);lockedRef.current=!!value.saving;setLocked(!!value.saving);if(value.saving)setStep('review');
     }).then(()=>{ready.current=true;}).catch(e=>{if(active.current)setError(failureMessage(e));}).finally(()=>{if(active.current)setBusy(false);});
     return()=>{active.current=false;clearTimeout(timer.current);if(ready.current&&!completed.current&&!running.current&&operation.current)persist().catch(()=>{});};
   },[]);
   useEffect(()=>{onBusyChange?.(busy);return()=>onBusyChange?.(false);},[busy]);
+  // A restored draft keeps only identities: fetch names and images for the review
+  // page on screen (Shopify by variant, else HotWax), then refresh those rows.
+  useEffect(()=>{
+    const shown=entries.slice(page*40,(page+1)*40).filter(entry=>entry.product.restored);
+    if(step!=='review'||!shown.length)return;
+    let stale=false;
+    const missing=shown.filter(entry=>!engine.displayOf(entry.product.productId)).map(entry=>entry.product.productId);
+    Promise.all([engine.hydrate(shown.map(entry=>entry.product.shopifyVariantId)),
+      missing.length&&request('products',{productIds:missing}).then(result=>result.items.forEach(product=>engine.remember(product))).catch(()=>{})]).then(()=>{
+      if(stale||!active.current)return;
+      const ids=new Set(shown.map(entry=>entry.product.productId));
+      current.current=current.current.map(entry=>ids.has(entry.product.productId)?{...entry,product:{...productOf({productId:entry.product.productId,variantId:entry.product.shopifyVariantId,identifier:entry.product.identifier}),restored:false}}:entry);
+      setEntries(current.current);
+    }).catch(()=>{});
+    return()=>{stale=true;};
+  },[step,page,entries.length]);
   useEffect(()=>{setHeader?.({heading:step==='review'?'Review hand count':'Hand count',subheading:count.name});},[step]);
   const change=useCallback((product,value)=>{
     if(blocked.current||!ready.current)return;

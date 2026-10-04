@@ -83,8 +83,8 @@ test('late matching an earlier scan respects a later explicit quantity correctio
 
 test('undo is a durable inverse event and a duplicate undo cannot reduce quantity again',async()=>{
  const f=fixture(),e=f.engine();await e.open(count);await e.append({code:'barcode',source:'external'});await e.aggregate();
- await e.undoLast();assert.equal(e.items.items.p1.quantity,0);
- await assert.rejects(e.undoLast(),/no recent scan/);
+ await e.undoScan(e.lastUndoable()!.id);assert.equal(e.items.items.p1.quantity,0);
+ assert.equal(e.lastUndoable(),undefined);
  const reopened=f.engine();await reopened.open(count);await reopened.aggregate();assert.equal(reopened.items.items.p1.quantity,0);
 });
 

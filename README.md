@@ -98,7 +98,7 @@ npm run deploy -- --version <release-name> --message '<release-summary>'
 
 `shared/oms-build-config.ts` is generated and gitignored: `npm run build` and `npm run deploy` write it with development flags disabled, `npm run dev` writes preview flags, and tests or typechecks only create it when it is missing. Always build and deploy through the npm scripts; running `shopify app build` or `shopify app deploy` directly ships whatever flags are on disk. Building alone does not release an app. See [Shopify app deploy](https://shopify.dev/docs/api/shopify-cli/app/app-deploy) for the release command. Stop the development preview before checking an installed release; an already-open POS extension may need POS to be relaunched to load the released bundle.
 
-The initial implementation has been deployed to a demo store and opened on a physical iPad with the local development server stopped. The current local regression suite contains 97 passing tests. Builds fail if an extension bundle comes within 512 bytes of Shopify's 64 KB compressed limit (`scripts/check-bundle.mjs`). Raw device captures, local test readbacks, historical implementation notes and machine-specific tool configuration are deliberately excluded from this repository.
+The initial implementation has been deployed to a demo store and opened on a physical iPad with the local development server stopped. The current local regression suite contains 98 passing tests. Builds fail if an extension bundle comes within 512 bytes of Shopify's 64 KB compressed limit (`scripts/check-bundle.mjs`). Raw device captures, local test readbacks, historical implementation notes and machine-specific tool configuration are deliberately excluded from this repository.
 
 ## Customer rollout boundaries
 

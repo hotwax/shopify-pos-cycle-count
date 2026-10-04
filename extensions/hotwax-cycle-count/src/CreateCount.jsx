@@ -18,7 +18,11 @@ export function CreateCount({request,storage,owner,timeZone,onCreated,back}) {
     const draft=await control.adopt('drafts',NEW,'count-draft',value=>value,null),operation=await control.adopt('creates',NEW,'create-count',value=>value,null);
     const products=[...(draft?.products||[])];
     const ids=draft?.productIds||[];
-    for(let i=0;i<ids.length;i+=200){const found=await request('products',{productIds:ids.slice(i,i+200)}).catch(()=>({items:[]}));products.push(...ids.slice(i,i+200).map(productId=>found.items.find(p=>p.productId===productId)||{productId,title:productId,sku:productId}));}
+    for(let i=0;i<ids.length;i+=200){
+      let found=[];
+      try {found=(await request('products',{productIds:ids.slice(i,i+200)})).items;} catch { /* Show IDs until HotWax answers. */ }
+      products.push(...ids.slice(i,i+200).map(productId=>found.find(p=>p.productId===productId)||{productId,title:productId,sku:productId}));
+    }
     if(!active.current)return;
     if(draft){setName(draft.name);setType(draft.type);setStart(draft.start);setDue(draft.due);setSelected(new Map(products.map(p=>[p.productId,p])));}
     pending.current=operation;if(operation)setStep('review');

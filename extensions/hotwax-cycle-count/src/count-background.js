@@ -6,6 +6,9 @@ import {controlKey, mailboxKey, readControl, readMailbox, storedLease} from './c
 // Documents only change while the modal runs, and the modal rewrites control
 // whenever it opens a session, so an unchanged revision means unchanged documents.
 const checked = new Map(), RECHECK = 600000;
+// A session that could not be uploaded (locked elsewhere, refused, unreadable)
+// waits a minute so the sessions after it still get their turn.
+const blocked = new Map(), RETRY = 60000;
 const same = (a, b) => a && b && a.state === b.state && a.pending === b.pending && a.sessionId === b.sessionId && Date.now() - a.at < 60000;
 /** One bounded turn of the background uploader. It reads the modal's control
  * record and documents and writes only its own mailbox (receipts, leases it
@@ -21,7 +24,7 @@ export async function syncBackground({native,owner,request,isCurrent=()=>true,co
   }
   const storage=new CountStorage(native),close=await enterBackground(native,owner);
   if(!close)return 0;
-  let pending=0,mailbox,changed=false;
+  let pending=0,mailbox,changed=false,current,used;
   const post=status=>{if(!same(mailbox.status,status)){mailbox.status={...status,at:Date.now(),background:true};changed=true;}};
   try {
     if(!isCurrent())return pending;
@@ -32,6 +35,8 @@ export async function syncBackground({native,owner,request,isCurrent=()=>true,co
     for(const field of ['receipts','leases','released'])for(const id of Object.keys(mailbox[field]))if(!live.has(id)){delete mailbox[field][id];changed=true;}
     for(const entry of control.catalogue) {
       if(!isCurrent())return pending;
+      if(blocked.get(entry.sessionId)>Date.now())continue;
+      current=entry;
       const seen=checked.get(entry.itemKey);
       if(seen&&seen.rev===control.rev&&Date.now()-seen.at<RECHECK)continue;
       // Sessions an earlier release saved are uploaded after the modal migrates them.
@@ -64,12 +69,13 @@ export async function syncBackground({native,owner,request,isCurrent=()=>true,co
           // Another terminal holds it: fence this terminal's older copies.
           delete mailbox.leases[entry.sessionId];
           if(previous?.fromDate!=null)mailbox.released[entry.sessionId]=previous.fromDate;
+          blocked.set(entry.sessionId,Date.now()+RETRY);
         }
         changed=true;
         post({...report,state:lease.owned?'pending':'locked'});
         return pending; // One bounded network operation per turn of the coordinator.
       }
-      const batch=dirty.slice(0,25);
+      const batch=dirty.slice(0,25);used=lease;
       const result=await request('saveBatch',{sessionId:entry.sessionId,lease,
         items:batch.map(item=>({productId:item.productId,code:item.productIdentifier,quantity:item.quantity,
           expectedQuantity:receipts[item.productId]?.quantity??item.serverQuantity??null}))});
@@ -83,6 +89,12 @@ export async function syncBackground({native,owner,request,isCurrent=()=>true,co
     if(!pending)post({state:'synced',pending:0});
     return pending;
   } catch(error) {
+    if(current){
+      blocked.set(current.sessionId,Date.now()+RETRY);
+      // OMS says another lease is active: this terminal's stored copies are fenced.
+      if(error?.leaseLost&&mailbox){delete mailbox.leases[current.sessionId];
+        if(used?.fromDate!=null)mailbox.released[current.sessionId]=used.fromDate;changed=true;}
+    }
     if(isCurrent()&&mailbox)post({state:'attention',message:error instanceof Error?error.message:'Open Cycle Count to resume syncing.'});
     return pending;
   } finally {

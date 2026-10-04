@@ -77,7 +77,7 @@ test('identity query returns only OMS ID and barcode mapping, retaining ambiguit
  const oms={postRead:async(_,body)=>{query=body;return {response:{docs:[{productId:'HW1',goodIdentifications:['UPCA/00123']}],numFound:1}};}};
  const result=await matchCodes(['00123'],{barcode:'UPCA',primary:'SKU',secondary:'productId'},oms as any,true);
  assert.equal(query.fields,'productId,goodIdentifications');assert.ok(query.filter.includes('isVirtual:false'));
- assert.deepEqual(result.matches,[{code:'00123',productId:'HW1',codes:['00123']}]);
+ assert.deepEqual(result.matches,[{code:'00123',productId:'HW1',codes:['00123'],countable:true}]);
 });
 test('a native miss retains OMS name/image fallback while a native hit uses identity-only matching',async()=>{
  const calls=[];

@@ -22,14 +22,6 @@ export function rows(value: unknown): OmsRow[] {
     !!row && typeof row === "object" && !Array.isArray(row)) : [];
 }
 
-export function inputRows(value: unknown, label: string, optional = false): OmsRow[] {
-  if (optional && value === undefined) return [];
-  const result = rows(value);
-  if (!Array.isArray(value) || value.length > 100 || result.length !== value.length) {
-    throw new OmsLookupError(`Invalid ${label}.`, 400);
-  }
-  return result;
-}
 
 export const text = (value: unknown): string => value == null ? "" : String(value);
 
@@ -44,20 +36,10 @@ export function one<T>(matches: T[], label: string): T {
   return matches[0];
 }
 
+/** The OMS origin the POS extension configured (configureDirectOms validates it). */
 export function configuredOrigin(): string {
-  const value = extensionConfiguration?.url ??
-    (typeof process !== 'undefined' ? process.env.OMS_BASE_URL : undefined);
-  if (!value) throw new OmsLookupError("OMS_BASE_URL is not configured on the app server.", 503);
-  let url: URL;
-  try { url = new URL(value); }
-  catch { throw new OmsLookupError("OMS_BASE_URL is invalid.", 503); }
-  const local = !extensionConfiguration && process.env.NODE_ENV !== "production" && url.protocol === "http:" &&
-    ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
-  if ((url.protocol !== "https:" && !local) || url.username || url.password ||
-      url.pathname !== "/" || url.search || url.hash) {
-    throw new OmsLookupError("OMS_BASE_URL must be HTTPS, or local HTTP in development.", 503);
-  }
-  return url.origin;
+  if (!extensionConfiguration) throw new OmsLookupError('Open this count from its configured Shopify POS app.', 503);
+  return extensionConfiguration.url;
 }
 
 /** A development preview stays on test data. Released apps use their shop's setup. */
