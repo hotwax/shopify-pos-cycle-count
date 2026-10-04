@@ -297,3 +297,29 @@ prove naturally lost native SDK acknowledgements, all crash boundaries or
 store-wide 100-slot quota behavior. All QA helpers were removed. No global
 data clear, customer release or final inventory adjustment occurred.
 [Business-only evidence](evidence/native-interrupted-migration.json).
+
+## Loaded preview disconnected through Control Center (TC28 follow-up)
+
+On clean candidate `3d02617` (implementation `2a607b0`), created dedicated
+QA Offline Control Center session `POSI_2dcda8314562d57` in QA Native D0.
+One native HID-field Return input for MP1133Brown produced a matched event,
+product image and local quantity 1; independent real OMS readback was
+10060 = 1. This was automated native text input, not a physical scanner.
+
+After unlocking POS, verified the loaded candidate's enabled Barcode field,
+disconnected Wi-Fi through Control Center, and dismissed the overlay without
+opening Settings. The radio showed disconnected and Shopify's modal replaced
+the app with: "No internet connection. An active internet connection is
+required to use this extension." The Barcode field was unavailable, so no
+offline scan was delivered. An earlier attempt was interrupted by the POS
+PIN lock and is not offline evidence.
+
+Restored Wi-Fi immediately, tapped Try again, and verified the same Local
+preview session reopened with Brown = 1 and its image. Independent OMS
+readback remained 10060 = 1. This verifies reconnect/recovery of the existing
+online event. Offline event persistence and offline upload ownership remain
+unproven; the observed development host prevents exercising those paths.
+It does not establish the behavior of a customer-installed candidate or a
+storage-refactor regression. No application changes, release, global data
+clear or inventory adjustment occurred.
+[Business-only evidence](evidence/native-offline-host.json).

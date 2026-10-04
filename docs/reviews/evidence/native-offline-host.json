@@ -1,0 +1,39 @@
+{
+  "date": "2026-10-04",
+  "candidateSha": "3d02617dc5fae6154dc5d9258e5f81cf02a2c4c0",
+  "implementationSha": "2a607b04781f0c86c402209155d0e01e4a227580",
+  "surface": "Physical iPad, Shopify POS 11.16.2 (530647), development modal with Local preview",
+  "countId": "POSC_e21baf00518696e",
+  "sessionId": "POSI_2dcda8314562d57",
+  "sessionName": "QA Offline Control Center",
+  "input": "Automated native HID-field Return; not physical scanner",
+  "online": {
+    "barcode": "MP1133Brown",
+    "hotwaxProductId": "10060",
+    "nativeQuantity": 1,
+    "omsQuantity": 1,
+    "productImageVisible": true
+  },
+  "disconnection": {
+    "method": "Wi-Fi disconnected through Control Center while the candidate was already loaded",
+    "radioDisconnectionVisuallyVerified": true,
+    "nativeHostMessage": "No internet connection. An active internet connection is required to use this extension.",
+    "barcodeFieldAvailable": false,
+    "offlineInputsDelivered": 0
+  },
+  "reconnect": {
+    "wifiRestored": true,
+    "action": "Try again",
+    "sameLocalPreviewSessionVerified": true,
+    "nativeQuantity": 1,
+    "omsQuantity": 1,
+    "productImageVisible": true
+  },
+  "excludedAttempt": "An earlier attempt encountered the POS PIN lock before input; it is not offline evidence.",
+  "limits": [
+    "Offline scan persistence and offline foreground/background ownership were not exercised.",
+    "Customer-installed candidate behavior was not tested.",
+    "No physical scanner input was used.",
+    "The native host limitation does not establish a storage-refactor regression."
+  ]
+}
