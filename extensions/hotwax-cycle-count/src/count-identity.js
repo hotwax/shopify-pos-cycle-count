@@ -8,14 +8,16 @@ const LIMIT = 20000;
 export class IdentityMap {
   constructor(storage) {this.storage = storage; this.records = new Map(); this.scope = null; this.dirty = false; this.queue = Promise.resolve();}
   /** Load the pairs for this scope; a different shop or OMS starts empty. */
-  async load(scope) {
+  load(scope) {
     const key = `${scope.shop}|${scope.oms}`;
-    if (this.scope === key) return;
+    // Return the same native read on another open, even if the first screen was
+    // cancelled. An unfinished map is never treated as loaded.
+    if (this.scope === key) return this.loading;
     this.records = new Map(); this.scope = key; this.dirty = false;
-    try {
-      const doc = await this.storage.load(IDENTITY_KEY);
-      if (doc && !doc.legacy && doc.header?.scope === key) for (const record of doc.records) this.records.set(record[0], record);
-    } catch { /* An unreadable map is rebuilt from HotWax results. */ }
+    return this.loading=this.storage.load(IDENTITY_KEY).then(doc=>{
+      if (this.scope === key && doc && !doc.legacy && doc.header?.scope === key)
+        for (const record of doc.records) this.records.set(record[0], record);
+    }).catch(()=>{ /* An unreadable map is rebuilt from HotWax results. */ });
   }
   get(variantId) {return variantId == null ? undefined : this.records.get(Number(variantId))?.[1];}
   add(variantId, productId) {

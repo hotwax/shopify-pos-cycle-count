@@ -7,18 +7,19 @@ export function CatalogPicker({request,onPick,selected,scope=false,disabled=fals
   const [result,setResult]=useState(null),[page,setPage]=useState(memory?.page||0),[loading,setLoading]=useState(false),[error,setError]=useState('');
   const [showTags,setShowTags]=useState(false),[tagPage,setTagPage]=useState(0),[tagSearch,setTagSearch]=useState('');
   const [selectedOnly,setSelectedOnly]=useState(false),[collecting,setCollecting]=useState(false);
-  const generation=useRef(0),alive=useRef(true);
-  useEffect(()=>()=>{alive.current=false;generation.current++;},[]);
+  const alive=useRef(true);
+  useEffect(()=>()=>{alive.current=false;},[]);
   useEffect(()=>{const timer=setTimeout(()=>{if(input.trim()!==search){setSearch(input.trim());setPage(0);}},250);return()=>clearTimeout(timer);},[input,search]);
   useEffect(()=>{if(memory)Object.assign(memory,{search:input,page});},[input,page]);
   useEffect(()=>{
-    const token=++generation.current;
+    const controller=new AbortController();
     if(selectedOnly){setLoading(false);return;}
     if(!search&&!tags.length){setResult(null);setLoading(false);return;}
     setLoading(true);setError('');
-    request('catalog',{search,tags,pageIndex:page,scope}).then(value=>{if(alive.current&&token===generation.current)setResult(value);})
-      .catch(e=>{if(alive.current&&token===generation.current)setError(e instanceof Error?e.message:'Could not complete this action. Your saved work is retained.');})
-      .finally(()=>{if(alive.current&&token===generation.current)setLoading(false);});
+    request('catalog',{search,tags,pageIndex:page,scope},{signal:controller.signal}).then(value=>{if(!controller.signal.aborted)setResult(value);})
+      .catch(e=>{if(!controller.signal.aborted)setError(e instanceof Error?e.message:'Could not complete this action. Your saved work is retained.');})
+      .finally(()=>{if(!controller.signal.aborted)setLoading(false);});
+    return()=>controller.abort();
   },[search,tags,page,scope,selectedOnly]);
   async function openTags(){
     setShowTags(true);setError('');if(tagOptions.length)return;

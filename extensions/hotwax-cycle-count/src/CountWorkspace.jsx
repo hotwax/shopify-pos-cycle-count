@@ -17,8 +17,9 @@ import {ScanEventRow} from './ScanEventRow.jsx';
 import {ScanFeedback} from './ScanFeedback.jsx';
 import {pruneLocalSessions,removeLocalSession,localCopyRemovable} from './count-cleanup';
 import {CountListIndex} from './count-list';
+import {abortable,assertNotAborted,REQUEST_TIMEOUT} from '../../../shared/abortable';
 
-const message=f=>f instanceof Error?f.message:'Could not complete this action. Your saved scans are retained.';
+const message=f=>f instanceof Error?f.message:'Could not complete this action. Your saved work is retained.';
 const editable=status=>['SESSION_CREATED','SESSION_ASSIGNED'].includes(status);
 const sessionTabs=[['all','All products'],['uncounted','Uncounted'],['scans','Scan events'],['counted','Counted']];
 // One table drives page titles, the Back target and its label. Targets:
@@ -127,9 +128,10 @@ export function CountWorkspace({owner,setHeader}) {
     await previous?.tail.catch(()=>{});
     if(ownership.current)ownership.current.active=false;
   }
-  async function attach(result,claimed=undefined) {
-    await foreground.current;
-    await settle();if(!own())return;
+  async function attach(result,claimed=undefined,signal=undefined) {
+    const step=work=>abortable(work,signal);
+    await step(()=>foreground.current);
+    await step(settle);if(!own())return;
     setStats(null);setLease(null);setLeaseProblem('');setShowLockDetails(false);setSyncError('');setConflicts([]);setLastSynced(null);
     listMemory.current={search:'',view:'all',page:0};
     setSessionTab('all');setScanSearch('');setScanPage(0);setScanFilter('all');
@@ -137,25 +139,23 @@ export function CountWorkspace({owner,setHeader}) {
     if(selected&&result.editable&&!result.items.some(item=>item.productId===selected.productId))
       result={...result,items:[...result.items,{...selected,quantity:null,isRequested:result.countType!=='DIRECTED_COUNT'}]};
     // The shared variant -> HotWax mapping belongs to this shop and OMS connection.
-    const scope=await omsScope();if(scope.oms)await identity.load(scope);
-    const claim=new CountLease(storage,owner,request,value=>{if(own())setLease(value);},
+    const scope=await step(omsScope);if(scope.oms)await step(()=>identity.load(scope));
+    const claim=new CountLease(storage,owner,request,value=>{if(own()&&!signal?.aborted)setLease(value);},
       ()=>shopify.connectivity.current.value.internetConnected!=='Connected');
     ownership.current=claim;
-    if(result.editable)try{await claim.open(result.sessionId,!latest.current.connected,claimed);}catch(failure){if(own())setLeaseProblem(message(failure));}
+    if(result.editable)try{await step(()=>claim.open(result.sessionId,!latest.current.connected,claimed));}catch(failure){assertNotAborted(signal);if(own())setLeaseProblem(message(failure));}
     const send=(action,payload)=>['saveBatch','submit','editSession','discardSession'].includes(action)?claim.write(action,payload):request(action,payload);
-    send.lookupBatch=request.lookupBatch;
-    send.lookupIdentityBatch=request.lookupIdentityBatch;
-    send.enrichScan=request.enrichScan;
-    send.variants=request.variants;
+    Object.assign(send,request);
     const state=new CountState(storage,owner,send,(value,nextStats)=>{
-      if(!own()||!state.active)return;
+      if(!own()||!state.active||signal?.aborted)return;
       setCount({...value});setStats(nextStats);
     },currentAuditContext(),()=>{
       if(!own()||ownership.current!==claim)throw new Error('Reopen this session to acquire its lock.');
       claim.assertCanScan(result.sessionId,currentAuditContext().deviceId);
     },{control,identity:scope.oms?identity:null});
     engine.current=state;
-    await state.open(result);if(!own()){state.active=false;return;}
+    try {await step(()=>state.open(result));}catch(failure){state.active=false;claim.active=false;throw failure;}
+    if(!own()){state.active=false;claim.active=false;return;}
     if(result.editable)state.aggregate().catch(failure=>{if(own())setSyncError(message(failure));});
     setRoute(!result.editable?(result.statusId==='SESSION_SUBMITTED'?'submitted':'readonly'):selected?'context':'count');
     if(selected)setProductId(selected.productId);
@@ -165,28 +165,32 @@ export function CountWorkspace({owner,setHeader}) {
       // Acknowledge the tap before OMS, lease or local-storage work starts.
       setOpening({sessionId,name:provided?.name||name||catalog.find(item=>item.sessionId===sessionId)?.name||'Session',from:route==='opening'?opening.from:route});
       setHidMode(false);go('opening');
-      // Back cancels the open at any await below; a late response is ignored.
-      const cancelled=new Promise((_,reject)=>{cancelOpen.current=()=>reject(OPEN_CANCELLED);});
-      cancelled.catch(()=>{});
-      const step=work=>Promise.race([work,cancelled]);
-      const online=latest.current.connected;
-      // The lease claim and the session detail are independent, so start both now.
-      const claimed=online&&provided?.editable!==false?request('leaseClaim',{sessionId}):undefined;
-      claimed?.catch(()=>{});
-      let result=provided;
-      if(!result)try{result=await step(request('detail',{sessionId}));}catch(failure){
-        if(failure===OPEN_CANCELLED||online)throw failure;
-        const entry=(await control.read()).catalogue.find(item=>item.sessionId===sessionId);
-        const cached=entry&&await readSavedSession(storage,entry);
-        if(!cached)throw failure;
-        result=cached;
-      }
-      if(claimed)await step(claimed.catch(()=>{}));
-      // Cleanup stops at its next session; only a removal already under way is awaited.
-      opened.current=true;
-      await step(Promise.all([foreground.current,removal.current.catch(()=>{})]));
-      cancelOpen.current=null;
-      await attach(result,result.editable?claimed:undefined);
+      // Back covers local loading too. A late native acknowledgement must not
+      // publish a session or accept scans after the user has left this screen.
+      const controller=new AbortController(),signal=controller.signal;
+      const cancel=()=>controller.abort(OPEN_CANCELLED);
+      cancelOpen.current=cancel;
+      const timer=setTimeout(()=>controller.abort(new Error(REQUEST_TIMEOUT)),65000);
+      const step=work=>abortable(work,signal);
+      try {
+        const online=latest.current.connected;
+        // The lease claim and the session detail are independent, so start both now.
+        const claimed=online&&provided?.editable!==false?request('leaseClaim',{sessionId},{signal}):undefined;
+        claimed?.catch(()=>{});
+        let result=provided;
+        if(!result)try{result=await step(()=>request('detail',{sessionId},{signal}));}catch(failure){
+          assertNotAborted(signal);
+          if(online)throw failure;
+          const entry=(await step(()=>control.read())).catalogue.find(item=>item.sessionId===sessionId);
+          const cached=entry&&await step(()=>readSavedSession(storage,entry));
+          if(!cached)throw failure;
+          result=cached;
+        }
+        // Cleanup stops at its next session; only a removal already under way is awaited.
+        opened.current=true;
+        await step(()=>removal.current.catch(()=>{}));
+        await attach(result,result.editable?claimed:undefined,signal);
+      }finally{clearTimeout(timer);if(cancelOpen.current===cancel)cancelOpen.current=null;}
     });
   }
   async function leave(toWork=true) {
@@ -315,7 +319,7 @@ export function CountWorkspace({owner,setHeader}) {
       if(current.stats?.pending||current.stats?.dirty)sync();
     },5000);
     const heartbeat=setInterval(()=>{
-      if(!ownership.current?.value?.owned||!engine.current?.count.editable||!own())return;
+      if(!ownership.current?.value?.owned||!engine.current?.active||!engine.current.count.editable||!own())return;
       ownership.current.renew().then(()=>{if(own())setLeaseProblem('');}).catch(failure=>{if(own())setLeaseProblem(message(failure));});
     },30000);
     const status=setInterval(()=>{

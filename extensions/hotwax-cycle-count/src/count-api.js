@@ -1,5 +1,6 @@
 import {currentOmsOrigin,forgetOmsLogin,openDirectOms,OMS_ORIGIN_KEY} from '../../../shared/direct-oms';
 import {handleCount} from '../../../shared/oms-count';
+import {abortable,assertNotAborted,REQUEST_TIMEOUT} from '../../../shared/abortable';
 import {createScanProductLookup,fetchVariantDisplays} from './scan-products';
 export {createMemberSearch} from './scan-products';
 
@@ -28,12 +29,11 @@ export async function countRequest(action, payload = {}, options = {}) {
   const owner = currentCountOwner();
   const session = shopify.session.currentSession;
   const staffId = shopify.session.staffMember.value?.id;
-  const assertOwner = () => {if (currentCountOwner() !== owner) throw new Error('The POS operator or store changed. Saved scans stay with their original operator.');};
   if (shopify.connectivity.current.value.internetConnected !== 'Connected')
-    throw new Error('POS is offline. Saved scans stay on this device; matching and sync resume when connected.');
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 55000);
-  const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
+    throw new Error('POS is offline. Saved scans stay on this device and sync when connected.');
+  const timeout = AbortSignal.timeout(options.timeoutMs ?? 55000);
+  const signal = options.signal ? AbortSignal.any([timeout, options.signal]) : timeout;
+  const assertOwner = () => {assertNotAborted(signal);if (currentCountOwner() !== owner) throw new Error('POS user changed. Reopen Cycle Count.');};
   const attempt = async () => {
     const {oms, identity, loginKey, reusedLogin} = await openDirectOms(shopify.session, session.locationId,
       {signal, storage: shopify.storage, readBudgetMs: LONG_READS.has(action) ? 45000 : undefined});
@@ -58,17 +58,16 @@ export async function countRequest(action, payload = {}, options = {}) {
     }
   };
   try {
-    return await attempt().catch(error => {if (error?.retryLogin) return attempt(); throw error;});
-  } finally {
-    clearTimeout(timer);
+    return await abortable(()=>attempt().catch(error => {assertOwner();if (error?.retryLogin) return attempt(); throw error;}),signal);
+  } catch(error) {
+    if (timeout.aborted && error === timeout.reason) throw new Error(REQUEST_TIMEOUT);
+    throw error;
   }
 }
 
-countRequest.lookupBatch = codes => countRequest("lookupBatch", {codes});
-
 export function bindCountRequest(owner, options = {}) {
   const request = (action,payload,callOptions) => {
-    if (currentCountOwner() !== owner) return Promise.reject(new Error('The POS operator changed. Reopening your counts…'));
+    if (currentCountOwner() !== owner) return Promise.reject(new Error('POS user changed. Reopen Cycle Count.'));
     return countRequest(action,payload,{...options,...callOptions});
   };
   request.lookupBatch = codes => request('lookupBatch',{codes});
