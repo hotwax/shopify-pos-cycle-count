@@ -37,7 +37,9 @@ export function CatalogPicker({request,onPick,selected,scope=false,disabled=fals
       if(alive.current)onSelectAll(items);
     }catch(e){if(alive.current)setError(e instanceof Error?e.message:'Could not complete this action. Your saved work is retained.');}finally{if(alive.current)setCollecting(false);}
   }
-  const selectedItems=selected?[...selected.values()]:[],products=selectedOnly?selectedItems.slice(page*40,(page+1)*40):(result?.items||[]);
+  // Retire stale native quantity fields while their replacement query loads.
+  // Keeping broad results mounted caused the observed native search stall.
+  const selectedItems=selected?[...selected.values()]:[],products=selectedOnly?selectedItems.slice(page*40,(page+1)*40):(loading?[]:result?.items||[]);
   const tagMatches=tagOptions.filter(t=>t.value.toLowerCase().includes(tagSearch.toLowerCase()));
   if(showTags)return <s-stack direction="block" gap="base">
     <BackButton loading={loading} onClick={()=>setShowTags(false)}>Products</BackButton><s-text type="strong">Filter by tags</s-text>

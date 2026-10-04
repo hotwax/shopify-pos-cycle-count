@@ -133,3 +133,27 @@ test('removal is resumable and the background reader never writes', async () => 
   await assert.rejects(new CountStorage(kv.native).peek(key), /changing/);
   assert.equal(kv.writes.length, writes);
 });
+
+test('native successful deletes of absent keys cannot stall legacy migration or recovery', async () => {
+  const kv = fakeKV();
+  let reads = 0;
+  const native = {...kv.native,
+    get: async (key: string) => {
+      assert.ok(++reads < 100, 'recovery must stop at the first absent overflow pair');
+      return kv.native.get(key);
+    },
+    delete: async (key: string) => {await kv.native.delete(key); return true;},
+  };
+  kv.data.set(key, JSON.stringify({version: 2, sessionId: 'S1', events: events(2)}));
+  kv.data.set(`${key}:more:1a`, JSON.stringify({of: key, data: [event(3)]}));
+  kv.data.set(`${key}:more:2b`, JSON.stringify({of: key, data: [event(4)]}));
+  kv.data.set('other-operator', JSON.stringify('keep'));
+  const storage = new CountStorage(native), migrated = (await storage.load(key))!;
+  assert.equal(migrated.legacy, true);
+  assert.deepEqual(migrated.records, events(2));
+  assert.deepEqual(kv.keys().sort(), [key, 'other-operator'].sort());
+  await storage.save(key, {header: migrated.header, records: migrated.records, keyOf: byId});
+  assert.deepEqual((await new CountStorage(native).load(key))!.records, events(2));
+  await new CountStorage(native).removeDocument(key);
+  assert.deepEqual(kv.keys(), ['other-operator']);
+});

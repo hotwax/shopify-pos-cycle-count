@@ -43,8 +43,11 @@ export class CountStorage {
     const referenced = new Map(more.map(ref => [ref.n, ref.slot]));
     for (let n = 1; n <= hw; n++) for (const slot of ['a', 'b']) if (referenced.get(n) !== slot) await this.native.delete(slotKey(key, n, slot));
     for (let n = hw + 1; ; n++) {
-      const a = await this.native.delete(slotKey(key, n, 'a')), b = await this.native.delete(slotKey(key, n, 'b'));
-      if (!a && !b) break;
+      const a = slotKey(key, n, 'a'), b = slotKey(key, n, 'b');
+      // POS can acknowledge deletion of a missing key with true. Read presence
+      // instead: using delete's result here can make session opening never finish.
+      if (await this.native.get(a) == null && await this.native.get(b) == null) break;
+      await this.deleteAll([a, b]);
     }
   }
 
@@ -80,7 +83,7 @@ export class CountStorage {
     // Unreferenced alternates and abandoned indices are left by interrupted commits.
     await this.sweep(key, root.removed ? [] : root.more, root.hw || 0);
     if (root.removed) {
-      if (await this.retireAll(root.retire || []).then(left => left.length)) throw new Error('Saved count cleanup is not finished. Reopen to retry.');
+      if (await this.retireAll(root.retire || []).then(left => left.length)) throw new Error('Count cleanup is unfinished. Reopen to retry.');
       await this.native.delete(key); this.docs.delete(key); return undefined;
     }
     const chunks = [];
@@ -204,7 +207,7 @@ export class CountStorage {
       // next load sweeps them if not.
       let committed = false;
       try {committed = parse(await this.native.get(key))?.stamp === stamp;}
-      catch {const failure = new Error('Storage acknowledgement was interrupted. Reopen this count to recover safely before scanning again.'); failure.recoveryRequired = true; throw failure;}
+      catch {const failure = new Error('Storage interrupted. Reopen this count before scanning.'); failure.recoveryRequired = true; throw failure;}
       if (!committed) {
         this.unsure.add(key);
         throw new Error(storageFull(error) ? 'This POS device has no free count storage. Finish and sync its other saved counts before adding more.'
