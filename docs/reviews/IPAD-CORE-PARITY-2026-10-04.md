@@ -27,7 +27,7 @@ The previous storage-cleanup/search fix is described in [NATIVE-STORAGE-CLEANUP.
 | Camera entry | The native camera scanner opened and closed. No actual camera barcode was captured. External scanner status remained “POS scanner not connected”. |
 | Hard bulk zero / approval | After its one counted unit and session submission, native select-all/review saved 1,722 remaining products across 69 batches. Independent paginated OMS readback: 25,848 inventory-view rows, exactly 1,722 unique import item keys/products, all zero, all in one session `POSZ_87e47032a0bf648`. Native approval submission succeeded; OMS `CYCLE_CNT_CMPLTD`. |
 
-The counts/scope sessions above were prepared through real REST fixtures to preserve the user's creation draft. They do not establish native count-creation or date-entry parity. New sessions within the dynamic count were created natively.
+The counts/scope sessions above were prepared through real REST fixtures to preserve the user's creation draft. Those REST fixtures do not establish native count-creation or date-entry parity; the separate native creation pass below does. New sessions within the dynamic count were created natively.
 
 ## Native storage measurement
 
@@ -69,15 +69,45 @@ Native Undo then produced **5,067 units and 5,069 journal entries** (the reversa
 
 Turning off iPad Wi-Fi made the development preview show the POS host's “Error loading extension” before any offline scan could be recorded. Wi-Fi was restored. The live tunnel/manifest were available, and a normal POS process restart plus preview reattachment recovered the clean app and existing recovery-session data. This does not prove a customer-installed offline defect or offline parity: the test involved the development preview/tunnel. No reset, reinstall or data clear was used. Offline scanning and pending background upload remain unfinished gates.
 
+## Native creation, independent optional dates and shared mapping
+
+Follow-up checkout/PR head at the start: `dfdee77da8bff19192eea60a5d182b7ff11ce488` (documentation only); clean implementation remains `82773c5`. All three counts below were created and started through the physical POS extension against Demo OMS, rather than inserted through REST.
+
+| Native form | Created count / seed session | Independent OMS readback |
+| --- | --- | --- |
+| Dynamic, neither date | `QA Native D0`, `POSC_e21baf00518696e` / `POSI_e21baf00518696e` | `DYNAMIC_COUNT`, both estimated dates absent, `CYCLE_CNT_IN_PRGS`. Native review displayed “Start when ready · No deadline”. |
+| Directed, start only | `QA Native DS`, `POSC_7f5d260590b4518` / `POSI_7f5d260590b4518` | `DIRECTED_COUNT`, start `1791090000000`, due absent. Native product search/select chose `10101`; items independently show that sole requested product with quantity unset. Native review displayed “Starts 2026-10-04 · No deadline”. |
+| Hard, due only | `QA Native HD`, `POSC_896521285eec3dd` / `POSI_896521285eec3dd` | `HARD_COUNT`, start absent, due `1791262799999`. Native review displayed “Start when ready · Due 2026-10-05”; clean summary loaded the actual 1,723-product facility scope, with no Extra tab. |
+
+Dates were entered with the native calendar. A temporary guarded draft control preserved the exact existing `Theft` creation draft, blanked only the QA draft entry for these tests and then restored the original draft through the same field setter. Original and restored JSON were compared exactly; the clean creation screen reopened with its original name, dynamic type, both dates and empty product selection. The temporary controls and generated declarations were removed exactly. No full control document replacement or storage clear occurred. WDA clearing a read-only date field did not unset it; that operation was not used as proof of optional dates. The accepted baseline uses the same native calendar component, so this is not reported as a new refactor regression.
+
+[Clean native hard-count summary after creation](evidence/native-hard-created.png)
+
+A temporary trace, restricted in the UI to `QA Native D0`, delegated the original `enrichScan`, `lookupIdentityBatch`, `lookupBatch` and shared-map `get` calls. It logged business IDs and timestamps in memory, never replaced API results or persisted rich data. The first actual native HID TextArea submission of `MP1133Brown` enriched through Shopify to variant **45679042199706** with an image, then called `lookupIdentityBatch`, which returned HotWax product **10060** with that same variant ID. Observed call durations: 67 ms for Shopify enrichment and 232 ms for identity lookup; these are single-call observations, not scanner-to-sync throughput benchmarks. Real Solr identifies this as `ShopifyShopProduct/10010/45679042199706`; variant `43899518189821` belongs to shop 10000 and was not used for this POS matching result.
+
+After a modal reload, a second empty session was created natively: **QA Map B**, `POSI_f5f32bb13849738`, in the same parent. The same barcode enriched through Shopify (53 ms), then shared-map `get(45679042199706)` returned **10060**. No `lookupIdentityBatch` or `lookupBatch` ran for that scan. Independent OMS items reads confirmed one unit of 10060 in each separate session. This proves cross-session reuse after reload, rather than a same-session barcode/item cache hit. [First native trace](evidence/native-map-first.json), [second native trace](evidence/native-map-second.json).
+
+The trace helper, workspace wrapper and generated declaration were removed exactly; `git diff --exit-code` confirmed the candidate source was clean before the further UI checks. No diagnostic code is committed.
+
+## Measured native scan layout on the clean candidate
+
+After removing the trace, QA Map B received real native TextArea/Return submissions for `MP1133Green`, deliberately invalid `QA-NO-PRODUCT-20261004` and another `MP1133Brown`. Native UI showed the appropriate green/brown product images and unmatched state; independent OMS reads showed 10061=1 and 10060=2. The invalid scan remained unmatched and did not add an OMS item. It remains visible in this QA session intentionally.
+
+With the native input already focused and keyboard settled, recorded accessibility bounds for **eight buttons/tabs** (camera, HID, hand count, submit and all four list tabs) were identical before input, at the first post-input snapshot and after the observed settled feedback for all three submissions. A separate first scan in previously empty directed session `POSI_7f5d260590b4518` established the same unchanged bounds from **Ready to scan** to **Counted** and switched to Scan events; OMS confirmed requested product 10101=1. This includes first-match, replacement image, unmatched and subsequent matched transitions. [Repeated/matched/unmatched bounds](evidence/native-scan-layout.json), [initial Ready-to-Counted bounds](evidence/native-scan-layout-first.json).
+
+The only accessibility-tree difference in these snapshots was a disabled Submit session button's static-text child being omitted; the button itself retained its bounds. This is not page movement. These are sampled native bounds, not a continuous frame-by-frame video or proof of external-scanner focus/throughput. The keyboard's initial appearance/scroll was allowed to settle before measurement. No diagnostic source code was present for this pass.
+
 ## Limits / remaining gates
 
-Not yet proven: native count creation and independently optional dates; cancellation through local preparation; measured per-scan layout movement; native shared-map-hit versus Solr call tracing; physical external/HID and actual camera scans; 2,000+ scope; store-wide near-capacity/interrupted migration; offline reopen and foreground/background upload ownership. Existing automated crash-recovery tests are separate evidence.
+Not yet proven: cancellation through local preparation; physical external/HID and actual camera scans; 2,000+ scope; store-wide near-capacity/interrupted migration; offline reopen and foreground/background upload ownership. Existing automated crash-recovery tests are separate evidence.
 
 The current Demo facility has 1,723 products and the countable variant query returned 1,770; no fabricated products or global inventory changes were made to inflate scope. A native PIN idle screen requires reinspection/reopen during long observations; it is not an expired signing/profile problem. No POS reset, reinstall, storage clear, customer deployment, merge, final approval or inventory adjustment occurred.
 
 During the foreign-lock check, the session badge used “Lock needs recheck” while the explanation correctly identified another terminal. The same `leaseProblem` precedence exists in the accepted baseline. Record this as a pre-existing label issue, not a new storage-refactor regression. The foreign-lock summary's red notice was not conclusively captured before the finite QA lock expired.
 
 The immediate Back-on-open probe did not establish cancellation: the empty QA session finished opening before a stable cancelled summary was observed. Keep this gate unfinished; an Appium click acknowledgment alone is not proof that the opening route handled Back.
+
+Native creation fixtures also remain in progress: D0 has separate contributions 10060=1 in its seed session and QA Map B has 10060=2, 10061=1 plus one deliberately unmatched event. DS has its requested 10101=1; HD remains uncounted. No duplicate session was created after an automation navigation failure.
 
 Recovery fixture sessions remain in progress intentionally. This retains a usable QA counting session for further recovery/scan tests. A has `10101=2`; B has `10001=3` and `10101=1`; QA Event Capacity has `10101=5067`. The parent has not been submitted for approval.
 
