@@ -1,0 +1,75 @@
+{
+  "candidate": "bf9d26bca89b1f34d00d6e3e6519d29146b5b5aa",
+  "implementation": "2a607b04781f0c86c402209155d0e01e4a227580",
+  "baselineWriter": "cf956cd88f4f8e7e4e2c162eca5c20bea7930b6e",
+  "shopifyPos": "11.16.2 (530647)",
+  "workEffortId": "POSC_e21baf00518696e",
+  "sessionId": "POSI_0a20261004cafe3",
+  "controlledNativeCommitBoundary": {
+    "session": "POSI_0a20261004cafe3",
+    "itemFormat": "hotwax-count-3",
+    "eventFormat": "hotwax-count-pages-1",
+    "itemQuantities": [
+      [
+        "10060",
+        2
+      ]
+    ],
+    "oldPages": 2
+  },
+  "actualPosTermination": {
+    "terminateApp": true,
+    "queryAppStateAfterTermination": 1
+  },
+  "candidatePreviewConfirmed": true,
+  "recoveredNativeStorage": {
+    "keys": [
+      ":count-items",
+      ":scan-events"
+    ],
+    "itemFormat": "hotwax-count-3",
+    "eventFormat": "hotwax-count-3",
+    "quantities": [
+      {
+        "productId": "10060",
+        "quantity": 2,
+        "revision": 2,
+        "syncedRevision": 2
+      },
+      {
+        "productId": "10061",
+        "quantity": 1,
+        "revision": 1,
+        "syncedRevision": 1
+      }
+    ],
+    "events": [
+      {
+        "id": 1,
+        "productId": "10060",
+        "quantity": 2,
+        "aggApplied": 1
+      },
+      {
+        "id": 2,
+        "productId": "10061",
+        "quantity": 1,
+        "aggApplied": 1
+      }
+    ],
+    "richFields": []
+  },
+  "realOmsQuantities": {
+    "10060": 2,
+    "10061": 1
+  },
+  "limits": [
+    "Controlled pause after real SDK item write; actual POS process terminated before journal migration. Not a naturally failed SDK acknowledgement.",
+    "Dedicated real Demo QA fixture was seeded by exact baseline writer; not an upgrade of a previously installed baseline release.",
+    "Store-wide 100-slot quota and all possible crash boundaries remain untested."
+  ],
+  "harnessCorrections": [
+    "Initial separate QA fixture POSI_0a20261004cafe2 lacked its required productIdentifier. Its identifier alone was repaired using real OMS lookup; the valid interruption was repeated in a fresh session.",
+    "Installed tile has separate native storage; candidate proof uses dev modal and visible Local preview marker."
+  ]
+}

@@ -266,3 +266,34 @@ Native rendering of all 44 pages and 2,000+ performance remain separate
 unverified gates. No count writes or inventory adjustments occurred.
 [Business-only comparison](evidence/native-large-sort.json); TC41 in the
 shared QA document records native and source coverage separately.
+
+## Actual POS termination during migration (TC42)
+
+On clean candidate `bf9d26b` (implementation `2a607b0`), used the exact
+`cf956cd` writer with the real Shopify SDK to seed fresh Demo session
+`POSI_0a20261004cafe3` (QA Migration Process Kill) in QA Native D0. The
+version-1 checkpoint already included Brown = 2 / event 1; the legacy journal
+had that unacknowledged event plus pending Green = 1 / event 2.
+A guarded QA wrapper delegated the real native item write, then withheld
+its return so POS could be terminated before the journal migrated. Native
+inspection showed the new item root, old journal root and both old pages;
+Appium terminateApp returned true and queryAppState returned 1.
+
+Removed the probe, reopened the exact development modal, verified Local
+preview and opened the named QA session. Recovery retained Brown = 2,
+applied Green = 1, and kept exactly two applied events. Real OMS readback
+confirmed exactly 10060 = 2 / 10061 = 1. Native inspection found just two
+new-format roots, no legacy pages, synced revisions 2/2 and 1/1, and no
+rich display fields. No application-code change was required.
+
+Harness corrections are explicit: the first separate QA fixture omitted its
+required productIdentifier; only that fixture's identifier was repaired, and
+the valid migration was repeated in the fresh session above. The installed
+tile and development modal have separate storage; the valid result is tied
+to the candidate preview, not the installed tile.
+
+This proves the controlled item/journal cutover interruption. It does not
+prove naturally lost native SDK acknowledgements, all crash boundaries or
+store-wide 100-slot quota behavior. All QA helpers were removed. No global
+data clear, customer release or final inventory adjustment occurred.
+[Business-only evidence](evidence/native-interrupted-migration.json).
