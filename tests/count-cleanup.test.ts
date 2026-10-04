@@ -45,7 +45,7 @@ test('pruning removes every key of finished sessions and keeps open, unsynced an
  const f=await fixture();
  assert.equal(await pruneLocalSessions({storage:f.storage,owner:'owner',request:f.status}),2);
  const catalog=f.data.get('hotwax-count:owner:sessions');
- assert.deepEqual(catalog.sessions.map(s=>s.sessionId).sort(),['open','unknown','unsynced']);
+ assert.deepEqual(catalog.catalogue.map(s=>s.sessionId).sort(),['open','unknown','unsynced']);
  assert.ok([...f.data.keys()].every(key=>!/voided|submitted/.test(key)),[...f.data.keys()].join('\n'));
  assert.ok([...f.data.keys()].some(key=>key.includes('session:unsynced')));
 });
@@ -54,5 +54,5 @@ test('pruning stops before removing when a session open begins, and skips the op
  const f=await fixture();
  assert.equal(await pruneLocalSessions({storage:f.storage,owner:'owner',request:f.status,isCurrent:()=>false}),0);
  assert.equal(await pruneLocalSessions({storage:f.storage,owner:'owner',request:f.status,keep:'voided'}),1);
- assert.ok(f.data.get('hotwax-count:owner:sessions').sessions.some(s=>s.sessionId==='voided'));
+ assert.ok(f.data.get('hotwax-count:owner:sessions').catalogue.some(s=>s.sessionId==='voided'));
 });

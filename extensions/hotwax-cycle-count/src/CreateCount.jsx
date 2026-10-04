@@ -2,31 +2,40 @@ import {useEffect,useRef,useState} from 'preact/hooks';
 import {CatalogPicker} from './CatalogPicker.jsx';
 import {ActionRow,BackButton} from './FlowParts.jsx';
 import {countTypeName} from './count-api';
+import {controlFor} from './count-control';
+// The count being created: its draft and its pending creation live in control.
+const NEW='count:new';
 const id=()=>Array.from({length:15},()=>Math.floor(Math.random()*16).toString(16)).join('');
 export function CreateCount({request,storage,owner,timeZone,onCreated,back}) {
   const [step,setStep]=useState('details'),[name,setName]=useState(''),[type,setType]=useState('DYNAMIC_COUNT'),[start,setStart]=useState(''),[due,setDue]=useState('');
   const [selected,setSelected]=useState(new Map()),[busy,setBusy]=useState(true),[error,setError]=useState(''),[duplicates,setDuplicates]=useState(null),[progress,setProgress]=useState('');
-  const active=useRef(true),pending=useRef(null),draftKey=`hotwax-count:${owner}:count-draft`,operationKey=`hotwax-count:${owner}:create-count`;
+  const active=useRef(true),pending=useRef(null),control=controlFor(storage.native||storage,owner);
+  const saveOperation=value=>control.setEntry('creates',NEW,value);
   const zone=timeZone||Intl.DateTimeFormat().resolvedOptions().timeZone;
   useEffect(()=>{(async()=>{
-    const [draft,operation]=await Promise.all([storage.get(draftKey),storage.get(operationKey)]);
+    // Drafts keep product IDs only; names come from HotWax again (an earlier release's
+    // draft still carries them).
+    const draft=await control.adopt('drafts',NEW,'count-draft',value=>value,null),operation=await control.adopt('creates',NEW,'create-count',value=>value,null);
+    const products=[...(draft?.products||[])];
+    const ids=draft?.productIds||[];
+    for(let i=0;i<ids.length;i+=200){const found=await request('products',{productIds:ids.slice(i,i+200)}).catch(()=>({items:[]}));products.push(...ids.slice(i,i+200).map(productId=>found.items.find(p=>p.productId===productId)||{productId,title:productId,sku:productId}));}
     if(!active.current)return;
-    if(draft){setName(draft.name);setType(draft.type);setStart(draft.start);setDue(draft.due);setSelected(new Map(draft.products.map(p=>[p.productId,p])));}
+    if(draft){setName(draft.name);setType(draft.type);setStart(draft.start);setDue(draft.due);setSelected(new Map(products.map(p=>[p.productId,p])));}
     pending.current=operation;if(operation)setStep('review');
   })().catch(e=>setError(e instanceof Error?e.message:'Could not complete this action. Your saved work is retained.')).finally(()=>{if(active.current)setBusy(false);});return()=>{active.current=false;};},[]);
-  async function saveDraft(){await storage.set(draftKey,{name,type,start,due,products:[...selected.values()].map(({productId,title,sku,primary,secondary})=>({productId,title,sku,primary,secondary}))});}
+  async function saveDraft(){await control.setEntry('drafts',NEW,{name,type,start,due,productIds:[...selected.keys()]});}
   async function next(value){try{if(!name.trim())throw new Error('Give the count a name.');if(start&&due&&start>due)throw new Error('The due date must be on or after the start date.');await saveDraft();setError('');setStep(value);}catch(e){setError(e instanceof Error?e.message:'Could not complete this action. Your saved work is retained.');}}
   function choose(product){setSelected(old=>{const next=new Map(old);if(next.has(product.productId))next.delete(product.productId);else if(next.size<2000)next.set(product.productId,product);return next;});}
   async function create(existingCountId=undefined){
     setBusy(true);setError('');
     try{
-      if(!pending.current){pending.current={operationId:id(),createdAt:Date.now(),name:name.trim(),type,startDate:start,dueDate:due,timeZone:zone,productIds:type==='DYNAMIC_COUNT'?[]:[...selected.keys()]};await storage.set(operationKey,pending.current);}
-      if(existingCountId){pending.current={...pending.current,existingCountId};await storage.set(operationKey,pending.current);}
+      if(!pending.current){pending.current={operationId:id(),createdAt:Date.now(),name:name.trim(),type,startDate:start,dueDate:due,timeZone:zone,productIds:type==='DYNAMIC_COUNT'?[]:[...selected.keys()]};await saveOperation(pending.current);}
+      if(existingCountId){pending.current={...pending.current,existingCountId};await saveOperation(pending.current);}
       for(let n=0;n<5;n++){
         const result=await request('createCount',pending.current);
         if(result.duplicate){setDuplicates(result.duplicate);return;}
         if(result.preparing){setProgress(`${result.remaining} products left to prepare`);continue;}
-        await storage.delete(operationKey);await storage.delete(draftKey);onCreated(result);return;
+        await saveOperation(null);await control.setEntry('drafts',NEW,null);onCreated(result);return;
       }
       throw new Error('Your count is saved. Continue to finish preparing its product list.');
     }catch(e){if(active.current)setError(e instanceof Error?e.message:'Could not complete this action. Your saved work is retained.');}finally{if(active.current)setBusy(false);}
@@ -61,7 +70,7 @@ export function CreateCount({request,storage,owner,timeZone,onCreated,back}) {
         <s-text>{pending.current?.startDate||start?`Starts ${pending.current?.startDate||start}`:'Start when ready'} · {pending.current?.dueDate||due?`Due ${pending.current?.dueDate||due}`:'No deadline'}</s-text>
         {type==='DYNAMIC_COUNT'&&<s-text color="subdued">The combined total from every session must include all units of each counted product across the store. Other products will be left unchanged.</s-text>}
       </s-stack></s-section>
-      {duplicates?<><s-text>{type==='DYNAMIC_COUNT'?'A count with this name is already open. Choose a different name, or return to All counts to continue it.':'A count with this name is already open. Add these products to an existing count, or choose a different name.'}</s-text>{type!=='DYNAMIC_COUNT'&&duplicates.map(item=><ActionRow key={item.workEffortId} title={item.name} detail={countTypeName(item.type)} disabled={busy||item.type!==type} onClick={()=>create(item.workEffortId)}/>)}<s-button disabled={busy} onClick={async()=>{await storage.delete(operationKey);pending.current=null;setDuplicates(null);setStep('details');}}>Choose another name</s-button></>:<s-button variant="primary" loading={busy} disabled={busy} onClick={()=>create()}>Create count</s-button>}
+      {duplicates?<><s-text>{type==='DYNAMIC_COUNT'?'A count with this name is already open. Choose a different name, or return to All counts to continue it.':'A count with this name is already open. Add these products to an existing count, or choose a different name.'}</s-text>{type!=='DYNAMIC_COUNT'&&duplicates.map(item=><ActionRow key={item.workEffortId} title={item.name} detail={countTypeName(item.type)} disabled={busy||item.type!==type} onClick={()=>create(item.workEffortId)}/>)}<s-button disabled={busy} onClick={async()=>{await saveOperation(null);pending.current=null;setDuplicates(null);setStep('details');}}>Choose another name</s-button></>:<s-button variant="primary" loading={busy} disabled={busy} onClick={()=>create()}>Create count</s-button>}
     </>}
   </s-stack></s-box></s-scroll-box>;
 }

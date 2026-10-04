@@ -54,8 +54,8 @@ test('6000 products remain paged, searchable and sortable without a 5000-item re
  const items=Array.from({length:6000},(_,i)=>({productId:String(i),title:`Item ${String(i).padStart(5,'0')}`,quantity:null,lastUpdatedAt:i}));
  const index=new CountListIndex();index.update(items);assert.equal(index.page('','all',0,'lastUpdated').items[0].productId,'5999');assert.equal(index.page('','all',149).items.length,40);
  const data=new Map(),native={get:async k=>data.get(k),set:async(k,v)=>{data.set(k,v);},delete:async k=>data.delete(k)};
- const store=new CountStorage(native);await store.writeDocument('large:count-items',{version:2,sessionId:'large',items:Object.fromEntries(items.map(i=>[i.productId,i]))});
- assert.equal(Object.keys((await new CountStorage(native).get('large:count-items')).items).length,6000);
+ const store=new CountStorage(native);await store.save('large:count-items',{header:{version:2,sessionId:'large'},records:items,keyOf:i=>i.productId,move:true});
+ assert.equal((await new CountStorage(native).load('large:count-items')).records.length,6000);
 });
 test('recently updated uses OMS timestamps on first open and keeps newer unsynced scans on reopen',async()=>{
  const items=[{...product,quantity:0,lastUpdatedAt:1000},{...product,productId:'p2',sku:'SKU2',codes:['two'],quantity:0,lastUpdatedAt:2000}];
@@ -88,7 +88,7 @@ test('scan history stays newest first across product sorts, enrichment, filters 
  const events=Array.from({length:85},(_,i)=>({id:i+1,createdAt:Math.floor(i/2)*1000,
   scannedValue:`barcode-${i+1}`,productId:i%2?'a':'z',quantity:1,mode:'add',aggApplied:i%3?1:0}));
  state.events={...state.events,nextId:86,events:[...events.filter(e=>e.id%2),...events.filter(e=>!(e.id%2))]};
- await state.write(state.eventKey,state.events);
+ await state.save('events',state.events);
  const reopened=new CountState(storage,'staff',async()=>{throw Error('No network');});
  await reopened.open(state.count);
  const index=new CountListIndex();index.update(reopened.itemList);

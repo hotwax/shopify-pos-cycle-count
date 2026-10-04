@@ -1,15 +1,15 @@
-import "@shopify/ui-extensions/preact";
+import './signals';
 import {render} from 'preact';
 import {useEffect,useState} from 'preact/hooks';
 import {currentCountOwner} from './count-api';
-import {statusKey} from './count-background';
+import {controlKey,latestStatus,mailboxKey} from './count-control';
 import {DEVELOPMENT_PREVIEW} from '../../../shared/oms-build-config';
 export default () => render(<CountTile/>,document.body);
 function CountTile() {
   const [status,setStatus]=useState(null);
   useEffect(()=>{
     let active=true;
-    const update=async()=>{const owner=currentCountOwner(),value=await shopify.storage.get(statusKey(owner));if(active&&owner===currentCountOwner())setStatus(value);};
+    const update=async()=>{const owner=currentCountOwner(),value=latestStatus(await shopify.storage.get(controlKey(owner)),await shopify.storage.get(mailboxKey(owner)));if(active&&owner===currentCountOwner())setStatus(value);};
     update().catch(()=>{});const timer=setInterval(()=>update().catch(()=>{}),5000);
     const unStaff=shopify.session.staffMember.subscribe(()=>{setStatus(null);update().catch(()=>{});});
     return()=>{active=false;clearInterval(timer);unStaff();};

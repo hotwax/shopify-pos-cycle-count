@@ -3,7 +3,7 @@ import {test} from 'node:test';
 import {CountState} from '../extensions/hotwax-cycle-count/src/count-state.js';
 import {CountListIndex,PRODUCT_PAGE_SIZE} from '../extensions/hotwax-cycle-count/src/count-list.js';
 const clone=v=>v===undefined?undefined:structuredClone(v);
-const local=()=>{const data=new Map();return {data,get:async key=>clone(data.get(key)),set:async(key,value)=>{data.set(key,clone(value));}};};
+const local=()=>{const data=new Map();return {data,get:async key=>clone(data.get(key)),set:async(key,value)=>{data.set(key,clone(value));},delete:async key=>data.delete(key)};};
 
 test('two sessions retain independent unsynced quantities and journals across reopen',async()=>{
  const storage=local(),lookup=async()=>({productId:'p1',sku:'sku1'});
@@ -12,7 +12,7 @@ test('two sessions retain independent unsynced quantities and journals across re
  const b=new CountState(storage,'owner',lookup);await b.open(two);await b.append({code:'sku1',source:'correction',quantity:3,productId:'p1'});await b.aggregate();
  const resumed=new CountState(storage,'owner',lookup);await resumed.open(one);
  assert.equal(resumed.items.items.p1.quantity,1);assert.equal(b.items.items.p1.quantity,3);assert.notEqual(a.eventKey,b.eventKey);
- assert.equal((await storage.get('hotwax-count:owner:sessions')).sessions.length,2);
+ assert.equal((await storage.get('hotwax-count:owner:sessions')).catalogue.length,2);
 });
 
 test('directed uncounted products stay null until an explicit zero or scan',async()=>{

@@ -1,4 +1,4 @@
-import {memo} from 'preact/compat';
+import {memo} from './memo';
 
 const MAX_QUANTITY=1000000;
 const quantityError=value=>value!==''&&(!Number.isSafeInteger(Number(value))||Number(value)<0||Number(value)>MAX_QUANTITY)?'Enter a whole number from 0 to 1,000,000.':'';

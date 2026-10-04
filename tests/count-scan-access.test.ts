@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {CountLease,leaseKey} from '../extensions/hotwax-cycle-count/src/count-lease.js';
-import {CountState,decodeDocument} from '../extensions/hotwax-cycle-count/src/count-state.js';
+import {CountState} from '../extensions/hotwax-cycle-count/src/count-state.js';
+import {CountStorage} from '../extensions/hotwax-cycle-count/src/count-storage.js';
+const journal=async(storage,key)=>({events:(await new CountStorage(storage).load(key))?.records||[]});
 
 function fixture() {
   const data=new Map();
   const storage={get:async key=>structuredClone(data.get(key)),set:async(key,value)=>{data.set(key,structuredClone(value));},delete:async key=>{data.delete(key);}};
-  let response={owned:true,available:false,deviceId:'POS_1',expiresAt:Date.now()+150000};
+  let response={owned:true,available:false,deviceId:'POS_1',fromDate:1000,expiresAt:Date.now()+150000};
   let failure: any=false,offline=false;
   const lease=new CountLease(storage,'owner',async()=>{if(failure)throw failure===true?Error('Lock request failed'):failure;return {...response};},()=>{},()=>offline);
   const state=new CountState(storage,'owner',async()=>{throw Error('Unexpected product lookup');},()=>{},{deviceId:'POS_1'},()=>lease.assertCanScan('session','POS_1'));
@@ -19,7 +21,7 @@ test('no acquired lock rejects every scan source without writing a journal event
   const f=fixture();await f.state.open(count);
   for(const source of ['external','embedded','camera','camera-confirm','hid'])await assert.rejects(f.state.append({...scan,source}),/Acquire/);
   assert.equal(f.state.events.events.length,0);
-  assert.equal(decodeDocument(f.data.get(f.state.eventKey)).events.length,0);
+  assert.equal((await journal(f.storage||f.state.native,f.state.eventKey)).events.length,0);
   await f.lease.open('session');await f.state.append(scan);
   assert.equal(f.state.events.events.length,1); // Rejected scans are never replayed.
 });
@@ -80,7 +82,7 @@ test('a scan queued behind storage work rechecks the lock before committing',asy
   const queued=f.state.append(scan);await waiting;
   f.lease.value.expiresAt=Date.now()-1;resume();await assert.rejects(queued,/Acquire/);
   assert.equal(f.state.events.events.length,0);
-  assert.equal(decodeDocument(f.data.get(f.state.eventKey)).events.length,0);
+  assert.equal((await journal(f.storage||f.state.native,f.state.eventKey)).events.length,0);
 });
 
 test('unmatched event filtering precedes search and pagination and excludes removed scans',async()=>{

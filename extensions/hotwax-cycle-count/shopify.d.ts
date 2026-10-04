@@ -28,6 +28,16 @@ declare module './src/ProductAction.jsx' {
 }
 
 //@ts-ignore
+declare module './src/signals.js' {
+  const shopify:
+    | import('@shopify/ui-extensions/pos.home.tile.render').Api
+    | import('@shopify/ui-extensions/pos.home.modal.render').Api
+    | import('@shopify/ui-extensions/pos.product-details.action.menu-item.render').Api
+    | import('@shopify/ui-extensions/pos.product-details.action.render').Api;
+  const globalThis: { shopify: typeof shopify };
+}
+
+//@ts-ignore
 declare module './src/count-api.js' {
   const shopify:
     | import('@shopify/ui-extensions/pos.home.tile.render').Api
@@ -39,7 +49,7 @@ declare module './src/count-api.js' {
 }
 
 //@ts-ignore
-declare module './src/count-background.js' {
+declare module './src/count-control.js' {
   const shopify:
     | import('@shopify/ui-extensions/pos.home.tile.render').Api
     | import('@shopify/ui-extensions/pos.home.modal.render').Api
@@ -61,20 +71,24 @@ declare module './src/scan-products.ts' {
 }
 
 //@ts-ignore
-declare module './src/count-storage.js' {
+declare module './src/CountWorkspace.jsx' {
   const shopify:
-    | import('@shopify/ui-extensions/pos.home.tile.render').Api
     | import('@shopify/ui-extensions/pos.home.modal.render').Api
-    | (import('@shopify/ui-extensions/pos.app.ready.data').Api &
-        import('@shopify/ui-extensions/pos.app.ready.data').ShopifyGlobal)
     | import('@shopify/ui-extensions/pos.product-details.action.render').Api;
   const globalThis: { shopify: typeof shopify };
 }
 
 //@ts-ignore
-declare module './src/count-coordination.js' {
+declare module './src/count-state.js' {
   const shopify:
-    | import('@shopify/ui-extensions/pos.home.tile.render').Api
+    | import('@shopify/ui-extensions/pos.home.modal.render').Api
+    | import('@shopify/ui-extensions/pos.product-details.action.render').Api;
+  const globalThis: { shopify: typeof shopify };
+}
+
+//@ts-ignore
+declare module './src/count-storage.js' {
+  const shopify:
     | import('@shopify/ui-extensions/pos.home.modal.render').Api
     | (import('@shopify/ui-extensions/pos.app.ready.data').Api &
         import('@shopify/ui-extensions/pos.app.ready.data').ShopifyGlobal)
@@ -85,7 +99,14 @@ declare module './src/count-coordination.js' {
 //@ts-ignore
 declare module './src/count-lease.js' {
   const shopify:
-    | import('@shopify/ui-extensions/pos.home.tile.render').Api
+    | import('@shopify/ui-extensions/pos.home.modal.render').Api
+    | import('@shopify/ui-extensions/pos.product-details.action.render').Api;
+  const globalThis: { shopify: typeof shopify };
+}
+
+//@ts-ignore
+declare module './src/count-coordination.js' {
+  const shopify:
     | import('@shopify/ui-extensions/pos.home.modal.render').Api
     | (import('@shopify/ui-extensions/pos.app.ready.data').Api &
         import('@shopify/ui-extensions/pos.app.ready.data').ShopifyGlobal)
@@ -94,15 +115,7 @@ declare module './src/count-lease.js' {
 }
 
 //@ts-ignore
-declare module './src/CountWorkspace.jsx' {
-  const shopify:
-    | import('@shopify/ui-extensions/pos.home.modal.render').Api
-    | import('@shopify/ui-extensions/pos.product-details.action.render').Api;
-  const globalThis: { shopify: typeof shopify };
-}
-
-//@ts-ignore
-declare module './src/count-state.js' {
+declare module './src/count-identity.js' {
   const shopify:
     | import('@shopify/ui-extensions/pos.home.modal.render').Api
     | import('@shopify/ui-extensions/pos.product-details.action.render').Api;
@@ -198,6 +211,14 @@ declare module './src/count-list.js' {
 }
 
 //@ts-ignore
+declare module './src/memo.js' {
+  const shopify:
+    | import('@shopify/ui-extensions/pos.home.modal.render').Api
+    | import('@shopify/ui-extensions/pos.product-details.action.render').Api;
+  const globalThis: { shopify: typeof shopify };
+}
+
+//@ts-ignore
 declare module './src/ProductRow.jsx' {
   const shopify:
     | import('@shopify/ui-extensions/pos.home.modal.render').Api
@@ -210,5 +231,12 @@ declare module './src/HandQuantityRow.jsx' {
   const shopify:
     | import('@shopify/ui-extensions/pos.home.modal.render').Api
     | import('@shopify/ui-extensions/pos.product-details.action.render').Api;
+  const globalThis: { shopify: typeof shopify };
+}
+
+//@ts-ignore
+declare module './src/count-background.js' {
+  const shopify: import('@shopify/ui-extensions/pos.app.ready.data').Api &
+    import('@shopify/ui-extensions/pos.app.ready.data').ShopifyGlobal;
   const globalThis: { shopify: typeof shopify };
 }

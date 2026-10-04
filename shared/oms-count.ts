@@ -98,7 +98,7 @@ async function context(identity: CountIdentity, oms: OmsConnection) {
     canPrestart: capabilities.canPrestart,
     canPreview: capabilities.canPreview,
     canRelease: capabilities.canRelease,
-    preferences,
+    preferences: {...preferences, shopId: text(shop.shopId)},
   };
 }
 export type Context = Awaited<ReturnType<typeof context>>;
@@ -279,8 +279,14 @@ export async function handleCount(
     const productId = text(mappings[0].productId), {details,balances} = await productDetails([productId],ctx,oms);
     const product = details.get(productId);
     if (!product) throw new OmsLookupError('The mapped product is unavailable in HotWax.',404);
-    return {productId,title:text(product.productName||product.internalName||productId),sku:text(product.internalName),
+    return {productId,shopifyVariantId:Number(variantId),title:text(product.productName||product.internalName||productId),sku:text(product.internalName),
       ...(ctx.canViewOnHand?{onHand:number(balances.get(productId)?.quantityOnHand)}:{})};
+  }
+  if(action==='products'){
+    // Display for saved draft products when a session is reopened; read only.
+    const ids=Array.isArray(payload.productIds)?[...new Set(payload.productIds.map(text))]:[];
+    if(!ids.length||ids.length>200||ids.some(id=>!id||id.length>80))throw new OmsLookupError('Request between 1 and 200 products.',400);
+    return {items:[...(await productSearchDetails(ids,ctx.preferences,oms)).values()]};
   }
   if(action==='catalog'){const result=await catalogPage(payload,ctx.preferences,oms);return {...result,items:await withInventory(result.items,ctx,oms)};}
   const creation=await handleCountCreation(identity,payload,ctx,oms);

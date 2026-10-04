@@ -7,11 +7,11 @@
   ],
   "scripts": {
     "shopify": "shopify",
-    "build": "node scripts/configure-oms.mjs --release && shopify app build",
+    "build": "node scripts/configure-oms.mjs --release && shopify app build && node scripts/check-bundle.mjs",
     "dev": "node scripts/configure-oms.mjs && shopify app dev",
     "info": "shopify app info",
     "generate": "shopify app generate",
-    "deploy": "node scripts/configure-oms.mjs --release && shopify app deploy",
+    "deploy": "node scripts/configure-oms.mjs --release && shopify app build && node scripts/check-bundle.mjs && shopify app deploy",
     "pretest": "node scripts/configure-oms.mjs --release --if-missing",
     "test": "node --import tsx --test tests/*.test.ts",
     "pretypecheck": "node scripts/configure-oms.mjs --release --if-missing",

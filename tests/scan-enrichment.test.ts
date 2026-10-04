@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {CountState,decodeDocument} from '../extensions/hotwax-cycle-count/src/count-state.js';
+import {CountState} from '../extensions/hotwax-cycle-count/src/count-state.js';
+import {CountStorage} from '../extensions/hotwax-cycle-count/src/count-storage.js';
+const journal=async(storage,key)=>({events:(await new CountStorage(storage).load(key))?.records||[]});
 import {createScanProductLookup} from '../extensions/hotwax-cycle-count/src/scan-products.ts';
 import {matchCodes} from '../shared/oms-count-products.ts';
 
@@ -19,7 +21,7 @@ test('durable scan gets POS display data before OMS identity; only OMS ID enable
  request.enrichScan=()=>native.promise;
  request.lookupIdentityBatch=()=>{identityCalls++;return oms.promise;};
  const f=await engine(request),id=await f.state.append({code:'00123',source:'external'});
- assert.equal(decodeDocument(f.data.get(f.state.eventKey)).events[0].id,id);
+ assert.equal((await journal(f.storage||f.state.native,f.state.eventKey)).events[0].id,id);
  const aggregation=f.state.aggregate();
  assert.equal(identityCalls,0);assert.equal(f.state.itemList.length,0);
  native.resolve(display);await f.state.enriching.get(id);
@@ -27,10 +29,16 @@ test('durable scan gets POS display data before OMS identity; only OMS ID enable
  assert.equal(f.state.historyPage().items[0].title,display.title);assert.equal(f.state.itemList.length,0);
  oms.resolve({matches:[{code:'00123',productId:'HW1',codes:['00123']}],errors:[]});await aggregation;
  assert.equal(f.state.events.events[0].productId,'HW1');assert.equal(f.state.items.items.HW1.quantity,1);
- assert.equal(f.state.items.items.HW1.imageUrl,display.imageUrl);assert.equal(f.stats().lastScan.matched,true);
+ assert.equal(f.state.view(f.state.items.items.HW1).imageUrl,display.imageUrl);assert.equal(f.stats().lastScan.matched,true);
  await f.state.aggregate();assert.equal(f.state.items.items.HW1.quantity,1);
+ // Reopened: nothing about the display was saved, so the row starts with its barcode and
+ // the visible variant is fetched from Shopify again.
+ const fetched=[];request.variants=async ids=>{fetched.push(...ids);return new Map([[20,{title:display.title,sku:display.sku,imageUrl:display.imageUrl}]]);};
  const reopened=new CountState(f.state.storage,'owner',request);await reopened.open(count);await reopened.aggregate();
- assert.equal(reopened.historyPage().items[0].imageUrl,display.imageUrl);assert.equal(reopened.items.items.HW1.quantity,1);
+ assert.equal(reopened.historyPage().items[0].imageUrl,undefined);assert.equal(reopened.historyPage().items[0].title,'00123');
+ await reopened.hydrate(reopened.historyPage().items.map(e=>e.variantId));
+ assert.deepEqual(fetched,[20]);assert.equal(reopened.historyPage().items[0].imageUrl,display.imageUrl);assert.equal(reopened.items.items.HW1.quantity,1);
+ assert.equal(reopened.view(reopened.items.items.HW1).title,display.title);
 });
 test('Shopify success with no HotWax identity stays unaggregated and can be manually corrected',async()=>{
  const request=async()=>{throw Error('No OMS match');};request.enrichScan=async()=>display;
@@ -79,7 +87,7 @@ test('a native miss retains OMS name/image fallback while a native hit uses iden
  request.lookupBatch=async codes=>{calls.push(['display-fallback',codes]);return {matches:codes.map(code=>({code,productId:'HW-fallback',title:'OMS fallback',imageUrl:'oms.jpg'})),errors:[]};};
  const f=await engine(request);await f.state.append({code:'native',source:'external'});await f.state.append({code:'oms-only',source:'external'});await f.state.aggregate();
  assert.deepEqual(calls,[['identity',['native']],['display-fallback',['oms-only']]]);
- assert.equal(f.state.items.items['HW-native'].imageUrl,display.imageUrl);assert.equal(f.state.items.items['HW-fallback'].imageUrl,'oms.jpg');
+ assert.equal(f.state.view(f.state.items.items['HW-native']).imageUrl,display.imageUrl);assert.equal(f.state.view(f.state.items.items['HW-fallback']).imageUrl,'oms.jpg');
  assert.equal(f.stats().lastScan.imageUrl,'oms.jpg');assert.equal(f.state.itemUnits,2);
 });
 test('missing variant lists load in parallel and stop once a barcode is ambiguous',async()=>{

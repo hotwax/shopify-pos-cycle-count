@@ -24,7 +24,34 @@ Submitting a count sends it for review. This app does not approve or apply inven
 
 An accepted scan is durably appended before aggregation. Shopify POS product lookup supplies display data when available, while OMS matching establishes the HotWax product ID required for aggregation. OMS product details provide a fallback when native lookup misses. Unmatched events remain available for resolution without blocking other products.
 
-The app uses Shopify Storage API documents with paged scan journals and product checkpoints. It does not rely on IndexedDB, a custom Web Worker, or a service worker. Product and event lists render at most 40 rows per page; network writes use bounded batches. Shopify allows 100 storage entries per extension, so product checkpoints use one page per 400 products, and opening the app removes local copies HotWax has finished with: discarded sessions, closed or cancelled counts, and submitted or approved sessions whose quantities HotWax confirms. Quota exhaustion refuses new writes while preserving existing scans.
+The app uses Shopify Storage API values only. It does not use IndexedDB, a custom Web Worker or a service worker. Product and event lists render at most 40 rows per page, and network writes use bounded batches.
+
+### Local storage
+
+Shopify allows 100 entries per extension and about 1 MB per value, shared by every operator on the register.
+
+**Count documents.**
+- Each session has a scan journal and a count checkpoint. Each starts as one value that is overwritten in place, and new keys are added only when a value would pass 900,000 bytes (measured, not counted in records).
+- Overflow values alternate between two slots, and the root value is written last, so a multi-value save commits atomically. A rejected write is reconciled before the next one, and an interrupted save is cleaned up on the next open.
+- The documents hold only identities, quantities and replay, undo and sync state. Names and images are fetched again by Shopify variant (or from HotWax) for what is on screen, and kept in a bounded memory cache.
+- A scan is stored before it is acknowledged. Scans that arrive during a write share the next one.
+
+**Shared variant map.** One map per Shopify shop and OMS connection links Shopify variant IDs to HotWax product IDs. Its pairs come only from HotWax: this count's products and countable search results. A scan whose variant is already mapped skips the HotWax lookup.
+
+**Product search.** Search in a session's product list uses POS product search and keeps the session's products in Shopify's relevance order, followed by local matches on identifiers and barcodes.
+
+**Earlier releases.** Documents and small values from earlier releases are converted when the modal first opens, in place and without clearing storage. Background upload resumes once a session has been converted.
+
+| Key | Written by | Removed |
+| --- | --- | --- |
+| `hotwax-count:<owner>:sessions` (control: saved sessions, leases and release fences, hand-count and count drafts, pending decisions and creations, status) | Modal | When it holds nothing (status alone does not keep it) |
+| `hotwax-count:<owner>:background` (mailbox: sync receipts per checkpoint, leases it claimed, its status) | Background | When the operator has no saved sessions |
+| `hotwax-count:<owner>:session:<id>:scan-events` / `:count-items`, plus `:more:<n><a/b>` overflow | Modal | By *Remove local copy*, or automatically once HotWax has finished with the session (discarded, count closed or cancelled, or submitted and approved quantities confirmed) |
+| `hotwax-count:identity` (shared variant map) | Modal | Replaced when the shop or OMS connection changes |
+| `hotwax-count:oms-origin` (the shop's OMS origin, for background use) | Either runtime | Replaced when the setting changes |
+| `hotwax-count:foreground`, `hotwax-count:background-busy` (coordination heartbeats) | Modal and background respectively | When each runtime finishes; they expire after 15 s otherwise |
+
+As a measured example, five sessions of 2,000 products and 4,000 scans each use 16 document values (largest 830 KiB) plus the five small keys above. See `tests/storage-redesign.test.ts`.
 
 Within one POS runtime, the shop's OMS origin, the OMS login (up to four minutes) and the store context (up to two minutes) are reused, so most actions need one OMS round trip. A rejected login or permission drops them immediately.
 
@@ -51,7 +78,7 @@ cp .env.example .env
 npm run dev -- --store your-development-store.myshopify.com
 ```
 
-`POS_OMS_LOCAL_PREVIEW=true` enables the existing test-environment write guard and development diagnostics. The guard accepts Test Maarg or the exact Demo Maarg / HotWax Demo pairing defined in the adapter. It does not provision an OMS registration or inject credentials. Keep `.env` local.
+`POS_OMS_LOCAL_PREVIEW=true` enables the existing test-environment write guard. The guard accepts Test Maarg or the exact Demo Maarg / HotWax Demo pairing defined in the adapter. It does not provision an OMS registration or inject credentials. Keep `.env` local.
 
 ## Validation and releases
 
@@ -71,7 +98,7 @@ npm run deploy -- --version <release-name> --message '<release-summary>'
 
 `shared/oms-build-config.ts` is generated and gitignored: `npm run build` and `npm run deploy` write it with development flags disabled, `npm run dev` writes preview flags, and tests or typechecks only create it when it is missing. Always build and deploy through the npm scripts; running `shopify app build` or `shopify app deploy` directly ships whatever flags are on disk. Building alone does not release an app. See [Shopify app deploy](https://shopify.dev/docs/api/shopify-cli/app/app-deploy) for the release command. Stop the development preview before checking an installed release; an already-open POS extension may need POS to be relaunched to load the released bundle.
 
-The initial implementation has been deployed to a demo store and opened on a physical iPad with the local development server stopped. The current local regression suite contains 86 passing tests. Raw device captures, local test readbacks, historical implementation notes and machine-specific tool configuration are deliberately excluded from this repository.
+The initial implementation has been deployed to a demo store and opened on a physical iPad with the local development server stopped. The current local regression suite contains 97 passing tests. Builds fail if an extension bundle comes within 512 bytes of Shopify's 64 KB compressed limit (`scripts/check-bundle.mjs`). Raw device captures, local test readbacks, historical implementation notes and machine-specific tool configuration are deliberately excluded from this repository.
 
 ## Customer rollout boundaries
 

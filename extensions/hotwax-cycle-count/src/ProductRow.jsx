@@ -1,4 +1,4 @@
-import {memo} from 'preact/compat';
+import {memo} from './memo';
 import {ActionRow} from './FlowParts.jsx';
 function ProductRowContent({item,selected,disabled,onSelect}) {
   const title=item.primary||item.title||item.sku||item.productId;

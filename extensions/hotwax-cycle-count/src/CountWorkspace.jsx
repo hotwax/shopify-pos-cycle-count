@@ -1,10 +1,11 @@
 import {useCallback,useEffect,useRef,useState} from 'preact/hooks';
-import {CountState,decodeDocument} from './count-state';
+import {CountState,readSavedSession} from './count-state';
 import {CountStorage} from './count-storage';
 import {CountLease} from './count-lease';
 import {enterForeground} from './count-coordination';
-import {statusKey} from './count-background';
-import {bindCountRequest,currentCountOwner,currentAuditContext,countStatus,countTypeName,workStatus,isOmsOutageSimulated,simulateOmsOutage,subscribeScans} from './count-api';
+import {controlFor} from './count-control';
+import {IdentityMap} from './count-identity';
+import {bindCountRequest,currentCountOwner,currentAuditContext,countStatus,countTypeName,workStatus,subscribeScans,omsScope,createMemberSearch} from './count-api';
 import {CountFlow} from './CountFlow.jsx';
 import {CreateCount} from './CreateCount.jsx';
 import {HandCount} from './HandCount.jsx';
@@ -16,7 +17,6 @@ import {ScanEventRow} from './ScanEventRow.jsx';
 import {ScanFeedback} from './ScanFeedback.jsx';
 import {pruneLocalSessions,removeLocalSession,localCopyRemovable} from './count-cleanup';
 import {CountListIndex} from './count-list';
-import {LOCAL_OMS_PREVIEW} from '../../../shared/oms-build-config';
 
 const message=f=>f instanceof Error?f.message:'Could not complete this action. Your saved scans are retained.';
 const editable=status=>['SESSION_CREATED','SESSION_ASSIGNED'].includes(status);
@@ -32,7 +32,6 @@ const ROUTES={
   work:{title:'Count summary'},count:{back:'summary'},readonly:{back:'summary'},submitted:{title:'Session submitted',back:'summary'},
   context:{title:'Count this product',back:'summary'},product:{title:'Count quantity',back:'session'},issue:{title:'Check this scan',back:'unmatched'},
   compare:{title:'Resolve quantity'},options:{},saved:{title:'Saved sessions',back:'options'},remove:{title:'Remove local copy',back:'options'},
-  diagnostics:{title:'Diagnostics',back:'options'},
 };
 const BACK_LABELS={summary:'Count summary',session:'Session details'};
 const OPEN_CANCELLED=Symbol('open cancelled');
@@ -47,7 +46,7 @@ export function CountWorkspace({owner,setHeader}) {
   const [lease,setLease]=useState(null),[leaseProblem,setLeaseProblem]=useState(''),[connected,setConnected]=useState(shopify.connectivity.current.value.internetConnected==='Connected');
   const [leaseNow,setLeaseNow]=useState(Date.now());
   const [showLockDetails,setShowLockDetails]=useState(false);
-  const [sources,setSources]=useState(shopify.scanner.sources.current.value),[outage,setOutage]=useState(false),[productId,setProductId]=useState(null);
+  const [sources,setSources]=useState(shopify.scanner.sources.current.value),[productId,setProductId]=useState(null);
   const [contextProduct,setContextProduct]=useState(null),[conflicts,setConflicts]=useState([]),[issueId,setIssueId]=useState(null),[localPage,setLocalPage]=useState(0);
   const [scanPage,setScanPage]=useState(0),[scanSearch,setScanSearch]=useState(''),[scanFilter,setScanFilter]=useState('all');
   const [sessionTab,setSessionTab]=useState('all');
@@ -55,24 +54,46 @@ export function CountWorkspace({owner,setHeader}) {
   const cameraRef=useRef({mode:'rapid',code:'',at:0});
   cameraRef.current.mode=cameraMode;
   const services=useRef(null);
-  if(!services.current)services.current={storage:new CountStorage(shopify.storage),request:bindCountRequest(owner),listIndex:new CountListIndex()};
-  const {storage,request}=services.current;
+  if(!services.current){
+    const storage=new CountStorage(shopify.storage);
+    services.current={storage,request:bindCountRequest(owner),listIndex:new CountListIndex(),control:controlFor(shopify.storage,owner),
+      identity:new IdentityMap(storage),search:createMemberSearch(shopify.productSearch)};
+  }
+  const {storage,request,control,identity}=services.current;
   const engine=useRef(null),ownership=useRef(null),alive=useRef(true),running=useRef(false),gate=useRef(false),latest=useRef(null),context=useRef(null);
   // Journal access waits for the background uploader; showing counts does not.
   const foreground=useRef(null),pruning=useRef(Promise.resolve()),removal=useRef(Promise.resolve()),opened=useRef(false),cancelOpen=useRef(null);
-  const key=`hotwax-count:${owner}`;
+  async function migrateSaved() {
+    for(const entry of (await control.read()).catalogue){
+      if(!own()||opened.current)return;
+      const [items,events]=[await storage.metadata(entry.itemKey),await storage.metadata(entry.eventKey)];
+      if(!items.legacy&&!events.legacy)continue;
+      const saved=await readSavedSession(storage,entry).catch(()=>null);
+      if(!saved||!own()||opened.current)continue;
+      const state=new CountState(storage,owner,()=>Promise.reject(new Error('Migration does not contact HotWax.')),()=>{},saved.audit||{},()=>{},{control});
+      await (removal.current=state.open(saved)).catch(()=>{});
+    }
+  }
+  const hydrateRows=useCallback(rows=>{engine.current?.hydrate(rows.map(row=>row.variantId)).catch(()=>{});},[]);
+  // Product search through Shopify, limited to this session's products by variant.
+  const searchMembers=useCallback((query,needed)=>{
+    const state=engine.current;
+    // Product search is not available offline; local matches still show.
+    if(!state||shopify.connectivity.current.value.internetConnected!=='Connected')return Promise.resolve(null);
+    return services.current.search(query,needed,state.itemList,(variantId,display)=>state.rememberVariant(variantId,display));
+  },[]);
   const listMemory=useRef({search:'',view:'all',page:0});
   const selectProduct=useCallback(item=>{setProductId(item.productId);go('product');},[]);
   const own=()=>alive.current&&currentCountOwner()===owner;
   const hasScanLock=()=>own()&&!!engine.current?.active&&!!engine.current.count?.editable&&!!ownership.current?.canScan(engine.current.count.sessionId,currentAuditContext().deviceId);
   const canCount=!!count?.editable&&hasScanLock();
   const leaseActive=!!lease&&!lease.available&&(lease.expiresAt==null||lease.expiresAt>leaseNow);
-  const offlineCounting=(!connected||outage)&&canCount;
-  const lockUnverified=!connected||outage||!!leaseProblem||!lease||!ownership.current?.confirmed;
+  const offlineCounting=!connected&&canCount;
+  const lockUnverified=!connected||!!leaseProblem||!lease||!ownership.current?.confirmed;
   const lockLabel=offlineCounting?'Offline · saving on this terminal':lockUnverified?'Lock needs recheck':!leaseActive?'Session not locked':lease.owned?'Locked to this terminal':'Locked on another terminal';
   const lockTone=lockUnverified||!leaseActive?'warning':lease.owned?'success':'critical';
   const sessionRoute=count?.statusId==='SESSION_SUBMITTED'?'submitted':count?.editable?'count':'readonly';
-  latest.current={route,count,stats,canCount,busy,connected,outage,hidMode};
+  latest.current={route,count,stats,canCount,busy,connected,hidMode};
   gate.current=canCount&&!busy&&route==='count';
   const title=route==='count'?count?.name||'Count items':route==='readonly'?count?.name||'Session details':route==='options'?(count?'Session options':'Count options'):ROUTES[route]?.title||'Cycle Count';
   useEffect(()=>{if(!['work','hand'].includes(route))setHeader({heading:title,subheading:history?`${history.facilityName} · ${history.userName}`:''});},[route,count?.name,history?.facilityName,history?.userName]);
@@ -89,8 +110,8 @@ export function CountWorkspace({owner,setHeader}) {
     finally{running.current=false;if(own())setBusy(false);}
   }
   async function refresh(pageIndex=0,selectedGroup=group) {
-    const local=await storage.get(`${key}:sessions`);
-    if(own())setCatalog(local?.sessions||[]);
+    const local=await control.read(true);
+    if(own())setCatalog(local.catalogue);
     const result=await request('storeCounts',{pageIndex,group:selectedGroup});
     if(own())setHistory(result);
     return result;
@@ -112,21 +133,24 @@ export function CountWorkspace({owner,setHeader}) {
     const selected=context.current;
     if(selected&&result.editable&&!result.items.some(item=>item.productId===selected.productId))
       result={...result,items:[...result.items,{...selected,quantity:null,isRequested:result.countType!=='DIRECTED_COUNT'}]};
+    // The shared variant -> HotWax mapping belongs to this shop and OMS connection.
+    const scope=await omsScope();if(scope.oms)await identity.load(scope);
     const claim=new CountLease(storage,owner,request,value=>{if(own())setLease(value);},
-      ()=>shopify.connectivity.current.value.internetConnected!=='Connected'||!!latest.current?.outage);
+      ()=>shopify.connectivity.current.value.internetConnected!=='Connected');
     ownership.current=claim;
-    if(result.editable)try{await claim.open(result.sessionId,!latest.current.connected||await isOmsOutageSimulated(),claimed);}catch(failure){if(own())setLeaseProblem(message(failure));}
+    if(result.editable)try{await claim.open(result.sessionId,!latest.current.connected,claimed);}catch(failure){if(own())setLeaseProblem(message(failure));}
     const send=(action,payload)=>['saveBatch','submit','editSession','discardSession'].includes(action)?claim.write(action,payload):request(action,payload);
     send.lookupBatch=request.lookupBatch;
     send.lookupIdentityBatch=request.lookupIdentityBatch;
     send.enrichScan=request.enrichScan;
+    send.variants=request.variants;
     const state=new CountState(storage,owner,send,(value,nextStats)=>{
       if(!own()||!state.active)return;
       setCount({...value});setStats(nextStats);
     },currentAuditContext(),()=>{
       if(!own()||ownership.current!==claim)throw new Error('Reopen this session to acquire its lock.');
       claim.assertCanScan(result.sessionId,currentAuditContext().deviceId);
-    });
+    },{control,identity:scope.oms?identity:null});
     engine.current=state;
     await state.open(result);if(!own()){state.active=false;return;}
     if(result.editable)state.aggregate().catch(failure=>{if(own())setSyncError(message(failure));});
@@ -142,17 +166,17 @@ export function CountWorkspace({owner,setHeader}) {
       const cancelled=new Promise((_,reject)=>{cancelOpen.current=()=>reject(OPEN_CANCELLED);});
       cancelled.catch(()=>{});
       const step=work=>Promise.race([work,cancelled]);
-      const online=latest.current.connected&&!await isOmsOutageSimulated();
+      const online=latest.current.connected;
       // The lease claim and the session detail are independent, so start both now.
       const claimed=online&&provided?.editable!==false?request('leaseClaim',{sessionId}):undefined;
       claimed?.catch(()=>{});
       let result=provided;
       if(!result)try{result=await step(request('detail',{sessionId}));}catch(failure){
         if(failure===OPEN_CANCELLED||online)throw failure;
-        const saved=await storage.get(`${key}:sessions`),entry=saved?.sessions.find(item=>item.sessionId===sessionId);
-        const cached=entry&&decodeDocument(await storage.get(entry.itemKey));
-        if(!cached?.count)throw failure;
-        result={...cached.count,items:Object.values(cached.items)};
+        const entry=(await control.read()).catalogue.find(item=>item.sessionId===sessionId);
+        const cached=entry&&await readSavedSession(storage,entry);
+        if(!cached)throw failure;
+        result=cached;
       }
       if(claimed)await step(claimed.catch(()=>{}));
       // Cleanup stops at its next session; only a removal already under way is awaited.
@@ -217,7 +241,7 @@ export function CountWorkspace({owner,setHeader}) {
       if(state.events.events.some(e=>e.aggApplied===0))throw new Error('Check unmatched scans before comparing quantities.');
       const remote=await request('detail',{sessionId:state.count.sessionId});
       if(!remote.editable){await attach(remote);return;}
-      const differences=state.itemList.filter(item=>item.revision!==item.syncedRevision).map(item=>({...item,serverQuantity:remote.items.find(row=>row.productId===item.productId)?.quantity??null}));
+      const differences=state.itemList.filter(item=>item.revision!==item.syncedRevision).map(item=>({...state.view(item),serverQuantity:remote.items.find(row=>row.productId===item.productId)?.quantity??null}));
       setConflicts(differences);go('compare');
     });
   }
@@ -247,13 +271,14 @@ export function CountWorkspace({owner,setHeader}) {
     foreground.current=enterForeground(shopify.storage,owner);
     foreground.current.catch(()=>{});
     (async()=>{
-      if(LOCAL_OMS_PREVIEW)setOutage(await isOmsOutageSimulated());
       if(shopify.product?.variantId)try{const selected=await request('contextProduct',{variantId:shopify.product.variantId});if(own()){context.current=selected;setContextProduct(selected);}}catch(failure){if(own())setError(message(failure));}
       await refresh();
-      // Drop finished local copies so the register stays within Shopify's storage limit.
-      pruning.current=foreground.current.then(()=>pruneLocalSessions({storage,owner,request,keep:engine.current?.count?.sessionId,
+      // Bring sessions an earlier release saved to the current format (so the
+      // background can upload them), then drop finished local copies so the
+      // register stays within Shopify's storage limit.
+      pruning.current=foreground.current.then(migrateSaved).then(()=>pruneLocalSessions({storage,owner,request,keep:engine.current?.count?.sessionId,
         isCurrent:()=>own()&&!opened.current,track:task=>(removal.current=task)}))
-        .then(removed=>{if(removed&&own())return storage.get(`${key}:sessions`).then(local=>{if(own())setCatalog(local?.sessions||[]);});}).catch(()=>{});
+        .then(removed=>{if(removed&&own())return control.read().then(local=>{if(own())setCatalog(local.catalogue);});}).catch(()=>{});
     })().catch(failure=>{if(own())setError(message(failure));}).finally(()=>{if(own())setBusy(false);});
     const unSources=shopify.scanner.sources.current.subscribe(setSources);
     const unConnection=shopify.connectivity.current.subscribe(value=>{
@@ -272,7 +297,7 @@ export function CountWorkspace({owner,setHeader}) {
         cameraRef.current.code=scan.data;cameraRef.current.at=now;
         if(cameraRef.current.mode==='confirm'){
           shopify.scanner.hideCameraScanner();gate.current=false;setCameraCode(scan.data);setCameraQuantity('1');setCameraProduct(null);setRoute('cameraConfirm');
-          const cached=engine.current?.items.items[engine.current.codes.get(scan.data.toLowerCase())];
+          const cached=engine.current?.view(engine.current.items.items[engine.current.codes.get(scan.data.toLowerCase())]);
           if(cached)setCameraProduct(cached);else request('lookup',{code:scan.data}).then(product=>{if(own())setCameraProduct(product);}).catch(()=>{});
           return;
         }
@@ -281,7 +306,7 @@ export function CountWorkspace({owner,setHeader}) {
     });
     const syncTimer=setInterval(()=>{
       const current=latest.current;
-      if(!current.connected||current.outage||current.busy||!current.canCount)return;
+      if(!current.connected||current.busy||!current.canCount)return;
       if(current.stats?.pending||current.stats?.dirty)sync();
     },5000);
     const heartbeat=setInterval(()=>{
@@ -291,9 +316,12 @@ export function CountWorkspace({owner,setHeader}) {
     const status=setInterval(()=>{
       const current=latest.current;if(!own()||!current.count)return;
       setLeaseNow(Date.now());
-      shopify.storage.set(statusKey(owner),{at:Date.now(),sessionId:current.count.sessionId,name:current.count.name,
+      // The tile's status lives in control: write it when it changes, or once a minute to stay fresh.
+      const next={sessionId:current.count.sessionId,name:current.count.name,
         pending:(current.stats?.pending||0)+(current.stats?.dirty||0),unmatched:current.stats?.pending||0,
-        state:!current.connected?'offline':current.stats?.pending?'attention':current.stats?.dirty?'pending':current.count.editable?'counting':'submitted'}).catch(()=>{});
+        state:!current.connected?'offline':current.stats?.pending?'attention':current.stats?.dirty?'pending':current.count.editable?'counting':'submitted'};
+      control.update(state=>state.status&&Date.now()-state.status.at<60000&&['sessionId','state'].every(field=>state.status[field]===next[field])
+        ?null:{...state,status:{...next,at:Date.now()}}).catch(()=>{});
     },5000);
     return()=>{
       alive.current=false;gate.current=false;clearInterval(syncTimer);clearInterval(heartbeat);clearInterval(status);
@@ -302,11 +330,14 @@ export function CountWorkspace({owner,setHeader}) {
       if(ownership.current)ownership.current.active=false;
       // Keep background uploads out until an in-flight foreground save finishes.
       cancelOpen.current?.();
-      Promise.allSettled([state?.syncing,state?.aggregating,state?.tail,pruning.current]).then(()=>foreground.current).then(close=>close?.()).catch(()=>{});
+      Promise.allSettled([state?.syncing,state?.aggregating,state?.tail,pruning.current,identity.flush()]).then(()=>foreground.current).then(close=>close?.()).catch(()=>{});
     };
   },[]);
   const isSessionDetail=['count','submitted','readonly'].includes(route);
   const scanHistory=isSessionDetail&&sessionTab==='scans'?engine.current?.historyPage(scanSearch,scanPage,scanFilter):null;
+  // Names and images are fetched again by Shopify variant for what is on screen only.
+  const visibleVariants=[stats?.lastScan?.variantId,...(scanHistory?.items||[]).map(event=>event.variantId)].filter(id=>id!=null).join(',');
+  useEffect(()=>{if(visibleVariants)engine.current?.hydrate(visibleVariants.split(',')).catch(()=>{});},[visibleVariants]);
   const resume=catalog.find(item=>editable(item.statusId));
   const selected=count?.items.find(item=>item.productId===productId);
   const issue=stats?.issues?.find(item=>item.id===issueId);
@@ -341,7 +372,6 @@ export function CountWorkspace({owner,setHeader}) {
       </s-stack>:route!=='hand'&&<s-heading>{title}</s-heading>}
       {error&&<s-banner tone="critical" heading={error}/>}
       {!connected&&<s-banner tone="warning" heading="Offline">{canCount?'Keep counting. Scans are saved on this terminal and match and sync after reconnecting.':'Saved sessions are available. Sessions this terminal already holds can keep counting; sync resumes after reconnecting.'}</s-banner>}
-      {outage&&<s-banner tone="warning" heading="Development test: HotWax unavailable"/>}
       {route==='opening'&&<s-section heading={opening?.name||'Session'}><s-stack direction="block" gap="base">
         <s-text>{busy?'Opening session…':'The session could not be opened.'}</s-text>
         {busy?<s-text color="subdued">Loading saved quantities and checking session access.</s-text>:<s-button variant="primary" onClick={()=>open(opening.sessionId,undefined,opening.name)}>Try again</s-button>}
@@ -360,7 +390,7 @@ export function CountWorkspace({owner,setHeader}) {
       </>}
       {count&&['count','context'].includes(route)&&<s-stack direction="block" gap="large">
         {count.countType==='DYNAMIC_COUNT'&&<s-text color="subdued">Dynamic count · Count all units of each product across the store, including back stock. Your team’s sessions are added together.</s-text>}
-        {!canCount&&count.editable&&<s-section heading={leaseActive&&!lease.owned?'Session in use':'Check device ownership'}><s-stack direction="block" gap="base"><s-text>{leaseProblem||(!connected||outage?'Reconnect to confirm this terminal’s lock.':leaseActive&&!lease.owned?'This session is locked on another terminal. Tap the lock badge for details.':'No active lock is confirmed. Recheck ownership to continue.')}</s-text><s-button disabled={busy||!connected} onClick={reclaim}>Recheck ownership</s-button></s-stack></s-section>}
+        {!canCount&&count.editable&&<s-section heading={leaseActive&&!lease.owned?'Session in use':'Check device ownership'}><s-stack direction="block" gap="base"><s-text>{leaseProblem||(!connected?'Reconnect to confirm this terminal’s lock.':leaseActive&&!lease.owned?'This session is locked on another terminal. Tap the lock badge for details.':'No active lock is confirmed. Recheck ownership to continue.')}</s-text><s-button disabled={busy||!connected} onClick={reclaim}>Recheck ownership</s-button></s-stack></s-section>}
         {route==='context'&&selected?<s-section heading={selected.title}><s-stack direction="block" gap="base"><s-text>{selected.sku} · {selected.quantity??0} counted here</s-text><s-button variant="primary" disabled={busy||!canCount} onClick={async()=>{if(await enqueue({code:selected.sku||selected.productId,productId:selected.productId,source:'product-context'})){context.current=null;setContextProduct(null);go('count');}}}>Count one unit</s-button><s-button disabled={busy||!canCount} onClick={()=>go('product')}>Enter a total quantity</s-button></s-stack></s-section>:<>
           <ScanFeedback last={last} hidMode={hidMode}/>
           <s-stack direction="inline" gap="base">
@@ -414,11 +444,9 @@ export function CountWorkspace({owner,setHeader}) {
           <s-text color="subdued">{shopify.device.name} · {shopify.device.registerName}</s-text>
           {count.editable&&<s-stack direction="block" gap="small"><s-stack direction="inline"><s-badge tone={lockTone}>{lockLabel}</s-badge></s-stack>{lease?.deviceId&&<s-text>Lock terminal: {lease.deviceId}{lease.operator?` · ${lease.operator}`:''}</s-text>}{lease?.lastHeartbeatAt&&<s-text color="subdued">Last heartbeat: {new Date(lease.lastHeartbeatAt).toLocaleTimeString()}</s-text>}</s-stack>}
         </>:<><ActionRow title="Refresh store counts" onClick={()=>run(async()=>{await refresh();go('home');})}/><ActionRow title="Saved sessions on this device" meta={String(catalog.length)} onClick={()=>go('saved')}/></>}
-        {LOCAL_OMS_PREVIEW&&<ActionRow title="Development diagnostics" onClick={()=>go('diagnostics')}/>}
       </>}
       {route==='saved'&&<>{catalog.slice(localPage*20,(localPage+1)*20).map(item=><ActionRow key={item.sessionId} title={item.name||item.sessionId} meta={editable(item.statusId)?'Resume':'View'} disabled={busy} onClick={()=>open(item.sessionId)}/>)}{!catalog.length&&<s-text>No saved sessions for this operator at this store.</s-text>}<CompactPager page={localPage} pages={Math.max(1,Math.ceil(catalog.length/20))} total={catalog.length} label="sessions" onPage={setLocalPage}/></>}
       {route==='remove'&&<><s-text>This removes this session’s scan history from this register. Submitted quantities stay in HotWax.</s-text><s-button variant="primary" disabled={busy} onClick={removeLocal}>Remove verified local copy</s-button></>}
-      {LOCAL_OMS_PREVIEW&&route==='diagnostics'&&<><s-text>{stats?`${stats.events} saved events · ${stats.pending} unmatched · ${stats.dirty} products to sync`:'No session open'}</s-text><s-button disabled={busy} onClick={()=>run(async()=>{await simulateOmsOutage(!outage);setOutage(!outage);})}>{outage?'Restore HotWax connection':'Simulate HotWax outage'}</s-button></>}
       {count&&isSessionDetail&&<s-tabs value={sessionTab} onChange={e=>selectSessionTab(e.currentTarget.value)}>
         <s-tab-list>{sessionTabs.map(([id,label])=><s-tab key={id} controls={id}>{label}</s-tab>)}</s-tab-list>
         {sessionTabs.map(([id])=><s-tab-panel key={id} id={id}>
@@ -436,7 +464,8 @@ export function CountWorkspace({owner,setHeader}) {
             {scanHistory?.items.map(event=><ScanEventRow key={event.id} event={event} disabled={busy||!canCount} onMatch={event=>{setIssueId(event.id);go('issue');}} onUndo={event=>run(async()=>{if(event.aggApplied===0)await engine.current.discardUnmatched(event.id);else await engine.current.undoScan(event.id);})}/>)}
             {!scanHistory?.total&&<s-text>No scan events match this view.</s-text>}
             {scanHistory&&<CompactPager {...scanHistory} label="events" disabled={busy} onPage={setScanPage}/>}
-          </s-stack>:<ProductList key={id} items={count.items} listIndex={services.current.listIndex} disabled={busy} memory={listMemory.current} activeView={id} showTabs={false} countExtras onSelect={selectProduct}/>)}
+          </s-stack>:<ProductList key={id} items={count.items} listIndex={services.current.listIndex} disabled={busy} memory={listMemory.current} activeView={id} showTabs={false} countExtras onSelect={selectProduct}
+            search={searchMembers} onVisible={hydrateRows}/>)}
         </s-tab-panel>)}
       </s-tabs>}
     </s-stack></s-box></s-scroll-box>

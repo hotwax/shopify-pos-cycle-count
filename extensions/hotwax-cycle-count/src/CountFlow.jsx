@@ -2,6 +2,7 @@ import {useEffect,useMemo,useRef,useState} from 'preact/hooks';
 import {countStatus,countTypeName,workStatus} from './count-api';
 import {ProductList,CompactPager} from './ProductList.jsx';
 import {ActionRow,BackButton,amount} from './FlowParts.jsx';
+import {controlFor} from './count-control';
 const operationId=()=>Array.from({length:15},()=>Math.floor(Math.random()*16).toString(16)).join('');
 const sameProducts=(a,b)=>[...a].sort().join(',')===[...b].sort().join(',');
 // The last product summary per count, shown at once while a fresh one loads.
@@ -14,7 +15,11 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
   const [contribution,setContribution]=useState(null),[contributionQuantity,setContributionQuantity]=useState(''),[decisionProgress,setDecisionProgress]=useState('');
   const [completionMessage,setCompletionMessage]=useState(''),[savedDecision,setSavedDecision]=useState(false);
   const [sessionName,setSessionName]=useState(''),[pendingCreate,setPendingCreate]=useState(null);
-  const cacheKey=`${owner}:${workEffortId}`,decisionKey=`hotwax-count:${owner}:decision:${workEffortId}`,createKey=`hotwax-count:${owner}:create-session:${workEffortId}`;
+  const cacheKey=`${owner}:${workEffortId}`,control=controlFor(storage.native||storage,owner);
+  // Pending decisions and session creations live in the operator's control record;
+  // a value an earlier release kept under its own key is moved there on first use.
+  const loadDecision=()=>control.adopt('decisions',workEffortId,'decision'),setDecisionRecord=value=>control.setEntry('decisions',workEffortId,value);
+  const loadCreate=()=>control.adopt('creates',workEffortId,'create-session'),setCreateRecord=value=>control.setEntry('creates',workEffortId,value);
   const name=useRef(''),active=useRef(true),running=useRef(false),progressRequest=useRef(0);
   const [progressBusy,setProgressBusy]=useState(false),[progressError,setProgressError]=useState(''),[sessionPage,setSessionPage]=useState(0);
   const [locks,setLocks]=useState({}),[lockError,setLockError]=useState(''),[lockRefresh,setLockRefresh]=useState(0);
@@ -51,7 +56,7 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
     active.current=true;
     const cached=progressCache.get(cacheKey);
     if(cached){setInfo(cached);setProgress(cached);}
-    run(async()=>{await refresh();const pending=await storage.get(decisionKey);if(pending&&active.current){setSelected(new Set(pending.productIds));setDecision(pending.action);setSavedDecision(true);setView('confirm');}});
+    run(async()=>{await refresh();const pending=await loadDecision();if(pending&&active.current){setSelected(new Set(pending.productIds));setDecision(pending.action);setSavedDecision(true);setView('confirm');}});
     return()=>{active.current=false;progressRequest.current++;};
   },[workEffortId]);
   const lockIds=info?.statusId==='CYCLE_CNT_IN_PRGS'?info.sessions.slice(sessionPage*20,(sessionPage+1)*20).filter(session=>['SESSION_CREATED','SESSION_ASSIGNED'].includes(session.statusId)).map(session=>session.sessionId).join(','):'';
@@ -80,42 +85,41 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
   async function showCreate() {
     // An unfinished earlier attempt is offered for retry with its own name and location.
     let pending=null;
-    try {pending=await storage.get(createKey);} catch { /* Start a fresh session below. */ }
+    try {pending=await loadCreate();} catch { /* Start a fresh session below. */ }
     if(!active.current)return;
     setPendingCreate(pending||null);name.current=pending?.name||'';setSessionName(pending?.name||'');if(pending?.area)setArea(pending.area);
     setView('create');
   }
   async function create() {
-    let pending=await storage.get(createKey);
+    let pending=await loadCreate();
     const typed=name.current.trim();
     // A changed name or location is a new session. The saved operation ID only
     // makes a retry of the same session idempotent.
-    if(pending&&((typed&&typed!==pending.name)||area!==pending.area)){await storage.delete(createKey);pending=null;setPendingCreate(null);}
-    if(!pending){pending={workEffortId,operationId:operationId(),name:typed,area};if(!pending.name)throw new Error('Enter a session name.');await storage.set(createKey,pending);}
+    if(pending&&((typed&&typed!==pending.name)||area!==pending.area)){await setCreateRecord(null);pending=null;setPendingCreate(null);}
+    if(!pending){pending={workEffortId,operationId:operationId(),name:typed,area};if(!pending.name)throw new Error('Enter a session name.');await setCreateRecord(pending);}
     for(let attempt=0;attempt<6;attempt++) {
       const result=await request('createSession',pending);
-      if(!result.preparing){await storage.delete(createKey);setPendingCreate(null);if(active.current)await openSession(result.session.sessionId,result.session);return;}
+      if(!result.preparing){await setCreateRecord(null);setPendingCreate(null);if(active.current)await openSession(result.session.sessionId,result.session);return;}
       setError(`Preparing your list · ${result.remaining} products remaining.`);
     }
     throw new Error('Your session is saved. Choose Start counting again to finish loading its product list.');
   }
   async function cancelDecision() {
-    await storage.delete(decisionKey);
+    await setDecisionRecord(null);
     if(!active.current)return;
     setSavedDecision(false);setDecisionProgress('');setSelected(new Set());setView('summary');await refresh(true);
   }
   async function confirm() {
     if(decision==='completeCount'){await request(decision,{workEffortId});await refresh(true);setView('summary');return;}
-    const key=decisionKey;
-    let pending=await storage.get(key);
+    let pending=await loadDecision();
     if(pending&&!(pending.action===decision&&sameProducts(pending.productIds,selected))){
       // An unsent decision is simply replaced; part of a sent one must be finished or cancelled.
       if(pending.completed)throw new Error('Part of an earlier decision is already saved in HotWax. Finish it with the same products, or cancel it.');
-      await storage.delete(key);pending=null;
+      await setDecisionRecord(null);pending=null;
     }
-    if(!pending){pending={action:decision,workEffortId,operationId:operationId(),productIds:[...selected]};await storage.set(key,pending);setSavedDecision(true);}
+    if(!pending){pending={action:decision,workEffortId,operationId:operationId(),productIds:[...selected]};await setDecisionRecord(pending);setSavedDecision(true);}
     const batches=Math.ceil(pending.productIds.length/25);
-    pending.completed=pending.completed||0;
+    pending={...pending,completed:pending.completed||0};
     for(let index=pending.completed;index<batches;index++){
       setDecisionProgress(`Saving batch ${index+1} of ${batches}`);
       const batchId=pending.operationId.slice(0,10)+index.toString(16).padStart(5,'0');
@@ -126,14 +130,14 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
         // meanwhile). Retrying cannot succeed, so clear it and show the current list.
         const status=failure instanceof Error&&'status' in failure?failure.status:undefined;
         if(status!==409)throw failure;
-        await storage.delete(key);setSavedDecision(false);setDecisionProgress('');setSelected(new Set());
+        await setDecisionRecord(null);setSavedDecision(false);setDecisionProgress('');setSelected(new Set());
         if(active.current)setView(pending.action==='confirmZero'?'zero':'extras');
         await refresh(true);
         throw new Error(`${failure instanceof Error?failure.message:'HotWax rejected this selection.'} The saved selection was cleared; review the products again.`);
       }
-      pending.completed=index+1;await storage.set(key,pending);
+      pending={...pending,completed:index+1};await setDecisionRecord(pending);
     }
-    await storage.delete(key);setSavedDecision(false);setDecisionProgress('');await refresh(true);
+    await setDecisionRecord(null);setSavedDecision(false);setDecisionProgress('');await refresh(true);
     setCompletionMessage(decision==='confirmZero'?`${amount(selected.size,'product')} marked as out of stock. Zero quantities have been recorded.`:`${amount(selected.size,'extra product')} discarded.`);
     setSelected(new Set());setView('summary');
   }

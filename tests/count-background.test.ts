@@ -4,7 +4,9 @@ import {CountState} from '../extensions/hotwax-cycle-count/src/count-state.js';
 import {CountStorage} from '../extensions/hotwax-cycle-count/src/count-storage.js';
 import {syncBackground} from '../extensions/hotwax-cycle-count/src/count-background.js';
 import {enterForeground} from '../extensions/hotwax-cycle-count/src/count-coordination.js';
-import {leaseKey} from '../extensions/hotwax-cycle-count/src/count-lease.js';
+import {controlKey,mailboxKey} from '../extensions/hotwax-cycle-count/src/count-control.js';
+// The lease the modal stored for this terminal (control is modal-owned; the test stands in for it).
+const holdLease=async(native,lease)=>native.set(controlKey('owner'),{...await native.get(controlKey('owner')),leases:{one:lease}});
 
 // These tests exercise local coordination and crash recovery only. Real OMS
 // ownership and mapping evidence is recorded separately in docs/evidence.
@@ -22,11 +24,13 @@ function fixture() {
 }
 test('background sync never edits the journal and a receipt preserves a newer local scan on reopen',async()=>{
   const f=fixture(),e=f.engine();await e.open(f.count);await e.append({code:'sku',source:'external'});await e.aggregate();
-  await f.native.set(leaseKey('owner','one'),{owned:true,expiresAt:Date.now()+150000,fromDate:1});
+  await holdLease(f.native,{owned:true,expiresAt:Date.now()+150000,fromDate:1});
   const before=structuredClone(f.data.get(e.itemKey));
   await syncBackground({native:f.native,owner:'owner',request:f.request});
   assert.equal(f.writes.length,1);assert.deepEqual(f.data.get(e.itemKey),before);
-  assert.equal((await f.native.get(`${e.itemKey}:receipts`)).items.p.quantity,1);
+  assert.equal((await f.native.get(mailboxKey('owner'))).receipts.one.items.p.quantity,1);
+  // The background never writes the modal's control record or documents.
+  assert.deepEqual(Object.keys((await f.native.get(controlKey('owner'))).leases),['one']);
   // The modal owns the journal; a late local revision must survive its old receipt.
   await e.append({code:'sku',source:'external'});await e.aggregate();
   const reopened=f.engine();await reopened.open({...f.count,items:[{productId:'p',sku:'sku',quantity:1}]});
@@ -42,9 +46,9 @@ test('a live foreground blocks the background uploader and current staff is chec
 });
 test('a lost background receipt acknowledgement retries the same quantity without rewriting the journal',async()=>{
   const f=fixture(),e=f.engine();await e.open(f.count);await e.append({code:'sku',source:'manual'});await e.aggregate();
-  await f.native.set(leaseKey('owner','one'),{owned:true,expiresAt:Date.now()+150000,fromDate:1});
+  await holdLease(f.native,{owned:true,expiresAt:Date.now()+150000,fromDate:1});
   const set=f.native.set;let fail=true;
-  f.native.set=async(key,value)=>{if(fail&&key.endsWith(':receipts')){fail=false;throw Error('Interrupted receipt');}return set(key,value);};
+  f.native.set=async(key,value)=>{if(fail&&key===mailboxKey('owner')){fail=false;throw Error('Interrupted receipt');}return set(key,value);};
   await syncBackground({native:f.native,owner:'owner',request:f.request});await syncBackground({native:f.native,owner:'owner',request:f.request});
   assert.equal(f.writes.length,2);assert.deepEqual(f.writes[0].items,f.writes[1].items);
   const reopened=f.engine();await reopened.open({...f.count,items:[{productId:'p',sku:'sku',quantity:1}]});
@@ -54,7 +58,7 @@ test('an operator with no saved sessions costs one read and no coordination writ
   const reads=[],writes=[];
   const native={get:async k=>{reads.push(k);},set:async k=>{writes.push(k);},delete:async k=>{writes.push(k);}};
   assert.equal(await syncBackground({native,owner:'idle',request:async()=>{throw Error('no request expected');}}),0);
-  assert.deepEqual(reads,['hotwax-count:idle:sessions']);assert.deepEqual(writes,[]);
+  assert.deepEqual(reads,['hotwax-count:idle:sessions','hotwax-count:idle:background']);assert.deepEqual(writes,[]);
 });
 test('coordination flags are short heartbeats, so a stopped runtime releases journal work quickly',async()=>{
   const f=fixture(),close=await enterForeground(f.native,'owner');

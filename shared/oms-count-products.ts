@@ -1,6 +1,7 @@
 import {OmsConnection, OmsLookupError, rows, text, type OmsRow} from './oms-connection';
 
-export type ProductPreferences = {barcode: string; primary: string; secondary: string};
+/** `shopId` is the HotWax ShopifyShop ID, used to read this shop's variant mapping. */
+export type ProductPreferences = {barcode: string; primary: string; secondary: string; shopId?: string};
 export const COUNTABLE_FILTERS = ['docType:PRODUCT','isVirtual:false','productTypeId:FINISHED_GOOD','-prodCatalogCategoryTypeIds:PCCT_DISCONTINUED'];
 const fields = 'productId,productName,title,internalName,goodIdentifications,sku,upc,groupName,groupId,parentProductName,mainImageUrl,smallImageUrl,mediumImageUrl,primaryProductCategoryName';
 const phrase = (value: string) => JSON.stringify(value);
@@ -22,8 +23,17 @@ export function identifications(product: OmsRow) {
     const row=value as OmsRow;return {type:text(row.goodIdentificationTypeId||row.type),value:text(row.idValue||row.value)};
   });
 }
+/** The Shopify variant HotWax maps this product to for the shop. Search
+ * documents carry `ShopifyShopProduct/<shopId>/<shopifyProductId>`; only an
+ * unambiguous mapping is returned. */
+export function shopifyVariantOf(ids: {type:string;value:string}[], shopId?: string) {
+  if(!shopId)return undefined;
+  const found=[...new Set(ids.filter(i=>i.type==='ShopifyShopProduct'&&i.value.startsWith(`${shopId}/`)).map(i=>i.value.slice(shopId.length+1)))];
+  const variant=Number(found[0]);
+  return found.length===1&&Number.isSafeInteger(variant)&&variant>0?variant:undefined;
+}
 export function presentProduct(product: OmsRow, prefs: ProductPreferences) {
-  const ids=identifications(product),id=text(product.productId);
+  const ids=identifications(product),id=text(product.productId),shopifyVariantId=shopifyVariantOf(ids,prefs.shopId);
   const resolve=(key: string)=>['SKU','SHOPIFY_PROD_SKU'].includes(key)?text(ids.find(i=>i.type==='SKU')?.value):
     ['parentProductName','groupName'].includes(key)?text(product.parentProductName||product.groupName):
     ['productId','internalName','title','primaryProductCategoryName'].includes(key)?text(product[key]):text(ids.find(i=>i.type===key)?.value);
@@ -31,7 +41,7 @@ export function presentProduct(product: OmsRow, prefs: ProductPreferences) {
     sku:text(ids.find(i=>i.type==='SKU')?.value||product.internalName||id),
     primary:resolve(prefs.primary)||resolve('SKU')||id,secondary:resolve(prefs.secondary)||id,
     imageUrl:text(product.smallImageUrl||product.mediumImageUrl||product.mainImageUrl),
-    codes:ids.filter(i=>i.type===prefs.barcode).map(i=>i.value)};
+    codes:ids.filter(i=>i.type===prefs.barcode).map(i=>i.value),...(shopifyVariantId?{shopifyVariantId}:{})};
 }
 async function search(oms: OmsConnection, query: OmsRow) {
   const result=await oms.postRead('/rest/s1/admin/search/query',{collection:'enterpriseSearch',...query});
@@ -76,7 +86,10 @@ export async function matchCodes(codes: string[], prefs: ProductPreferences, oms
   for(const code of codes){
     const found=result.docs.filter(p=>identifications(p).some(i=>i.type===prefs.barcode&&i.value.toLowerCase()===code.toLowerCase()));
     if(found.length!==1)errors.push({code,message:found.length?'This barcode matches more than one OMS product. Select the correct product.':'No countable OMS product matches this barcode. Find the product to match it.'});
-    else matches.push(identityOnly?{code,productId:text(found[0].productId),codes:[code]}:{code,...presentProduct(found[0],prefs)});
+    else {
+      const shopifyVariantId=shopifyVariantOf(identifications(found[0]),prefs.shopId);
+      matches.push(identityOnly?{code,productId:text(found[0].productId),codes:[code],...(shopifyVariantId?{shopifyVariantId}:{})}:{code,...presentProduct(found[0],prefs)});
+    }
   }
   return {matches,errors};
 }

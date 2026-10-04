@@ -3,32 +3,42 @@ import {useCallback,useEffect,useMemo,useRef,useState} from 'preact/hooks';
 import {CatalogPicker} from './CatalogPicker.jsx';
 import {BackButton,amount} from './FlowParts.jsx';
 import {CompactPager} from './ProductList.jsx';
+import {controlFor} from './count-control';
 
 const MAX_QUANTITY=1000000;
 const quantityError=value=>value!==''&&(!Number.isSafeInteger(Number(value))||Number(value)<0||Number(value)>MAX_QUANTITY)?'Enter a whole number from 0 to 1,000,000.':'';
 const failureMessage=e=>e instanceof Error?e.message:'Could not save your hand count. Your draft is retained.';
-
-
+// Drafts keep only identities and entered quantities; names and images stay in memory.
+const compact=entries=>entries.map(({product,quantity})=>({productId:product.productId,variantId:product.shopifyVariantId??product.variantId,
+  identifier:product.identifier||product.sku||product.productId,quantity}));
 
 export function HandCount({request,engine,storage,owner,count,done,disabled=false,setHeader,onBusyChange}) {
   const [entries,setEntries]=useState([]),[step,setStep]=useState('search'),[error,setError]=useState(''),[busy,setBusy]=useState(true),[page,setPage]=useState(0),[locked,setLocked]=useState(false);
-  const key=`hotwax-count:${owner}:hand-draft:${count.sessionId}`;
+  const control=controlFor(storage.native||storage,owner),sessionId=count.sessionId;
+  // A draft product with the display this runtime knows (Shopify, then HotWax).
+  const productOf=entry=>({...engine.view({productId:entry.productId,variantId:entry.variantId,productIdentifier:entry.identifier}),
+    shopifyVariantId:entry.variantId,identifier:entry.identifier});
   const operation=useRef(''),active=useRef(true),current=useRef([]),queue=useRef(Promise.resolve()),timer=useRef(null),running=useRef(false),completed=useRef(false),ready=useRef(false),lockedRef=useRef(false),blocked=useRef(true),searchMemory=useRef({search:'',page:0});
   blocked.current=disabled||busy||locked;
   // Serialize draft snapshots so a slower earlier write cannot erase later edits.
   function persist(next=current.current,saving=lockedRef.current) {
     if(!operation.current)operation.current=`hand-${Date.now()}-${Math.random()}`;
-    const snapshot={id:operation.current,entries:next,saving};
-    const task=queue.current.catch(()=>{}).then(()=>storage.set(key,snapshot));
+    const snapshot={id:operation.current,entries:compact(next),saving};
+    const task=queue.current.catch(()=>{}).then(()=>control.setEntry('drafts',sessionId,snapshot));
     queue.current=task;return task;
   }
   useEffect(()=>{
     active.current=true;
-    storage.get(key).then(value=>{
+    // An earlier release saved full product objects under its own key: keep their
+    // display in memory and move the compact draft into control.
+    control.adopt('drafts',sessionId,'hand-draft',legacy=>{legacy.entries.forEach(entry=>engine.remember(entry.product));return {...legacy,entries:compact(legacy.entries)};}).then(async value=>{
+      if(!active.current||!value)return;
+      const missing=value.entries.filter(entry=>!engine.omsDisplay.has(entry.productId)).map(entry=>entry.productId);
+      await Promise.all([engine.hydrate(value.entries.map(entry=>entry.variantId)),
+        missing.length&&request('products',{productIds:missing.slice(0,200)}).then(result=>result.items.forEach(product=>engine.remember(product))).catch(()=>{})]);
       if(!active.current)return;
-      if(value){operation.current=value.id;current.current=value.entries.map(entry=>({...entry,quantity:String(entry.quantity)}));setEntries(current.current);lockedRef.current=!!value.saving;setLocked(!!value.saving);if(value.saving)setStep('review');}
-      ready.current=true;
-    }).catch(e=>{if(active.current)setError(failureMessage(e));}).finally(()=>{if(active.current)setBusy(false);});
+      operation.current=value.id;current.current=value.entries.map(entry=>({product:productOf(entry),quantity:String(entry.quantity)}));setEntries(current.current);lockedRef.current=!!value.saving;setLocked(!!value.saving);if(value.saving)setStep('review');
+    }).then(()=>{ready.current=true;}).catch(e=>{if(active.current)setError(failureMessage(e));}).finally(()=>{if(active.current)setBusy(false);});
     return()=>{active.current=false;clearTimeout(timer.current);if(ready.current&&!completed.current&&!running.current&&operation.current)persist().catch(()=>{});};
   },[]);
   useEffect(()=>{onBusyChange?.(busy);return()=>onBusyChange?.(false);},[busy]);
@@ -66,7 +76,7 @@ export function HandCount({request,engine,storage,owner,count,done,disabled=fals
       if(!batch.length||batch.some(entry=>!Number.isSafeInteger(entry.quantity)||entry.quantity<=0||entry.quantity>MAX_QUANTITY))throw new Error('Enter a whole quantity for each product before saving.');
       await persist(current.current,true);lockedRef.current=true;setLocked(true);
       await engine.addBatch(batch,operation.current);
-      await storage.delete(key);completed.current=true;if(active.current)done(true);
+      await queue.current.catch(()=>{});await control.setEntry('drafts',sessionId,null);completed.current=true;if(active.current)done(true);
     });
   }
   async function back() {

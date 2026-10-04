@@ -1,4 +1,4 @@
-import {memo} from "preact/compat";
+import {memo} from './memo';
 import {useRef, useEffect, useState} from "preact/hooks";
 // POS TextField has no Return event. A one-row native TextArea delivers the
 // HID scanner's CR/LF suffix through onInput and keeps focus between scans.

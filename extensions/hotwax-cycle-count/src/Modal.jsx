@@ -1,4 +1,4 @@
-import "@shopify/ui-extensions/preact";
+import './signals';
 import {render} from 'preact';
 import {useEffect,useState} from 'preact/hooks';
 import {currentCountOwner} from './count-api';

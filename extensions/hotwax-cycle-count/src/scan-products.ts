@@ -57,3 +57,51 @@ export function createScanProductLookup(api: ProductSearchApiContent | undefined
     inflight.set(key,task); return task;
   };
 }
+
+type Variant={id:number;title?:string;displayName?:string;sku?:string;image?:string;productId?:number;product?:{title?:string;featuredImage?:string}};
+const variantDisplay=(variant:Variant,product?:{title?:string;featuredImage?:string})=>{
+  const parent=product||variant.product;
+  return {title:parent?.title?[parent.title,variant.title!=='Default Title'?variant.title:''].filter(Boolean).join(' · '):variant.displayName||variant.title||'',
+    sku:variant.sku||'',imageUrl:variant.image||parent?.featuredImage||''};
+};
+/** Display for up to 50 Shopify variants (one bulk call); missing variants are omitted. */
+export async function fetchVariantDisplays(api: ProductSearchApiContent | undefined, ids: number[]) {
+  const found=new Map<number,{title:string;sku:string;imageUrl:string}>();
+  if(!api||!ids.length)return found;
+  const result=await api.fetchProductVariantsWithIds(ids.slice(0,50));
+  for(const variant of result.fetchedResources||[])found.set(variant.id,variantDisplay(variant as Variant));
+  return found;
+}
+type Member={productId:string;variantId?:number};
+/**
+ * Search the shop's products through POS and keep only this session's products,
+ * matched by Shopify variant ID, in Shopify's relevance order. Pages continue
+ * until `needed` members are found or the results end (at most 20 pages per
+ * query), so filtering out non-members never produces a false empty page.
+ */
+export function createMemberSearch(api: ProductSearchApiContent | undefined) {
+  const cache=new Map<string,{ids:string[];seen:Set<string>;cursor?:string;done:boolean;pages:number;members:number}>();
+  let latest='';
+  return async (query:string,needed:number,members:Member[],remember:(variantId:number,display:{title:string;sku:string;imageUrl:string})=>void)=>{
+    if(!api||!query)return null;
+    // A newer query stops this walk; a call spends at most 4 s and the next call resumes.
+    latest=query;const deadline=Date.now()+4000;
+    const byVariant=new Map(members.filter(member=>member.variantId!=null).map(member=>[Number(member.variantId),member.productId]));
+    let entry=cache.get(query);
+    if(!entry||entry.members!==byVariant.size)entry={ids:[],seen:new Set(),done:false,pages:0,members:byVariant.size};
+    cache.delete(query);cache.set(query,entry);
+    while(cache.size>20)cache.delete(cache.keys().next().value!);
+    while(!entry.done&&entry.ids.length<needed&&entry.pages<20&&byVariant.size&&latest===query&&Date.now()<deadline){
+      const result=await api.searchProducts({queryString:query,first:50,...(entry.cursor?{afterCursor:entry.cursor}:{})});
+      entry.pages++;entry.cursor=result.lastCursor;entry.done=!result.hasNextPage||!result.lastCursor;
+      const products=result.items||[],bare=products.filter(product=>!product.variants?.length).map(product=>product.id);
+      // Search results may omit variants; one bulk fetch fills them in.
+      const full=bare.length?new Map((await api.fetchProductsWithIds(bare)).fetchedResources.map(product=>[product.id,product])):new Map();
+      for(const product of products)for(const variant of (product.variants?.length?product.variants:full.get(product.id)?.variants)||[]){
+        const productId=byVariant.get(variant.id);
+        if(productId&&!entry.seen.has(productId)){entry.seen.add(productId);entry.ids.push(productId);remember(variant.id,variantDisplay(variant as Variant,product));}
+      }
+    }
+    return {ids:entry.ids,complete:entry.done||entry.pages>=20||!byVariant.size};
+  };
+}

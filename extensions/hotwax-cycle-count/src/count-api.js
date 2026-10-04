@@ -1,20 +1,15 @@
-import {forgetOmsLogin,openDirectOms} from '../../../shared/direct-oms';
+import {currentOmsOrigin,forgetOmsLogin,openDirectOms,OMS_ORIGIN_KEY} from '../../../shared/direct-oms';
 import {handleCount} from '../../../shared/oms-count';
-import {LOCAL_OMS_PREVIEW} from '../../../shared/oms-build-config';
-import {createScanProductLookup} from './scan-products';
+import {createScanProductLookup,fetchVariantDisplays} from './scan-products';
+export {createMemberSearch} from './scan-products';
 
 export function currentCountOwner() {
   const session = shopify.session.currentSession;
   return `${session.shopId}:${session.locationId}:${shopify.session.staffMember.value?.id}`;
 }
-const outageKey = () => `hotwax-count:${currentCountOwner()}:test-oms-outage`;
-export async function isOmsOutageSimulated() {
-  return LOCAL_OMS_PREVIEW && await shopify.storage.get(outageKey()) === true;
-}
-export async function simulateOmsOutage(enabled) {
-  if (!LOCAL_OMS_PREVIEW) throw new Error('Connection fault testing is only available in development.');
-  if (enabled) await shopify.storage.set(outageKey(), true);
-  else await shopify.storage.delete(outageKey());
+/** The shop and OMS connection that scope the shared variant mapping. */
+export async function omsScope() {
+  return {shop: String(shopify.session.currentSession.shopId), oms: currentOmsOrigin() || await shopify.storage.get(OMS_ORIGIN_KEY)};
 }
 
 // Shop, facility, profile, permissions and preferences change rarely. Reusing
@@ -34,7 +29,6 @@ export async function countRequest(action, payload = {}, options = {}) {
   const session = shopify.session.currentSession;
   const staffId = shopify.session.staffMember.value?.id;
   const assertOwner = () => {if (currentCountOwner() !== owner) throw new Error('The POS operator or store changed. Saved scans stay with their original operator.');};
-  if (await isOmsOutageSimulated()) throw new Error('Demo test: OMS connection is unavailable. Scans remain on this device.');
   if (shopify.connectivity.current.value.internetConnected !== 'Connected')
     throw new Error('POS is offline. Saved scans stay on this device; matching and sync resume when connected.');
   const controller = new AbortController();
@@ -80,6 +74,7 @@ export function bindCountRequest(owner, options = {}) {
   request.lookupBatch = codes => request('lookupBatch',{codes});
   request.lookupIdentityBatch = codes => request('lookupIdentityBatch',{codes});
   request.enrichScan = createScanProductLookup(shopify.productSearch,()=>currentCountOwner()===owner);
+  request.variants = ids => fetchVariantDisplays(shopify.productSearch, ids);
   return request;
 }
 

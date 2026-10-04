@@ -14,6 +14,9 @@ export const OMS_ORIGIN_KEY = 'hotwax-count:oms-origin';
 let origin: {value: string; until: number} | undefined;
 const logins = new Map<string, {token: string; until: number}>();
 
+/** The OMS origin this runtime last resolved from the shop's setting, if any. */
+export const currentOmsOrigin = () => origin?.value;
+
 /** Drop a reused OMS login after OMS rejects it, or every login on an identity change. */
 export function forgetOmsLogin(key?: string) {
   if (key) logins.delete(key); else logins.clear();
