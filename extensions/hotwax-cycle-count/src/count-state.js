@@ -16,6 +16,8 @@ export class CountState {
   constructor(storage, owner, request, receive = () => {}, audit = {}, assertCanCount = () => {}) {
     this.storage = storage; this.owner = owner; this.request = request; this.receive = receive;
     this.tail = Promise.resolve(); this.active = true; this.failures = new Map(); this.enriching = new Map();
+    // POS display data waiting for the next journal commit, keyed by event ID.
+    this.displays = new Map(); this.displayVersion = 0; this.memo = {};
     this.eventKey = `hotwax-count:${owner}:scan-events`;
     this.itemKey = `hotwax-count:${owner}:count-items`;
     this.audit = audit;
@@ -100,6 +102,40 @@ export class CountState {
     this.codes = new Map();
     for (const item of Object.values(this.items.items)) for (const code of item.codes || []) this.codes.set(code.toLowerCase(), item.productId);
   }
+  /** Journal-derived values, recomputed only when the journal array changes. */
+  journalIndex() {
+    if (this.memo.journal?.events !== this.events.events) {
+      const pending = [], negated = new Set();
+      for (const event of this.events.events) {
+        if (event.aggApplied === 0) pending.push(event);
+        if (event.negatedScanEventId) negated.add(event.negatedScanEventId);
+      }
+      this.memo.journal = {events: this.events.events, pending, negated};
+    }
+    return this.memo.journal;
+  }
+  /** Display data for an event, including data not yet saved with a commit. */
+  display(event) {
+    if (event.shopifyProduct || event.manuallyMatched || event.aggApplied === -1) return event.shopifyProduct;
+    return this.displays.get(event.id);
+  }
+  /** Copy waiting display data into a journal copy before it is written. */
+  applyDisplays(events) {
+    const merged = [];
+    for (const [id, display] of this.displays) {
+      let index = events.events.length - 1;
+      while (index >= 0 && events.events[index].id !== id) index--;
+      const event = events.events[index];
+      if (!event || event.shopifyProduct || event.manuallyMatched || event.aggApplied === -1) {this.displays.delete(id); continue;}
+      events.events[index] = {...event, shopifyProduct: display}; merged.push(id);
+    }
+    return merged;
+  }
+  async commitEvents(events) {
+    const merged = this.applyDisplays(events);
+    await this.write(this.eventKey, events); this.events = events;
+    for (const id of merged) this.displays.delete(id);
+  }
   notify() {
     // Journal appends do not rebuild the product array or search index. Item
     // commits replace the map and preserve unchanged row object identities.
@@ -110,10 +146,10 @@ export class CountState {
       this.dirtyCount = this.itemList.filter(i => i.revision !== i.syncedRevision).length;
     }
     const items = this.itemList;
-    const pending = this.events.events.filter(e => e.aggApplied === 0);
+    const {pending} = this.journalIndex();
     const undo = this.lastUndoable();
     const lastEvent = this.events.events[this.events.events.length-1];
-    const lastProduct = lastEvent && {...this.items.items[lastEvent.productId],...lastEvent.shopifyProduct};
+    const lastProduct = lastEvent && {...this.items.items[lastEvent.productId],...this.display(lastEvent)};
     this.receive({...this.count, items, units: this.itemUnits}, {
       events: this.events.events.length, pending: pending.length,
       dirty: this.dirtyCount,
@@ -155,24 +191,20 @@ export class CountState {
       }
       if(!Number.isSafeInteger(event.quantity)||Math.abs(event.quantity)>1000000||(event.mode==='add'&&event.source!=='undo'&&event.quantity<=0))throw new Error('Enter a whole quantity from 1 to 1,000,000.');
       events.events.push(event);
-      await this.write(this.eventKey, events); this.events = events; this.notify();
+      await this.commitEvents(events); this.notify();
       // Enrich every newly saved scan immediately, even while an older OMS batch is in flight.
       this.enrichEvent(event).catch(()=>{});
       return event.id;
     });
   }
   enrichEvent(event) {
-    if (!this.request.enrichScan || event.shopifyProduct || event.product || ['undo','correction'].includes(event.source)) return Promise.resolve();
+    if (!this.request.enrichScan || event.shopifyProduct || event.product || this.displays.has(event.id) || ['undo','correction'].includes(event.source)) return Promise.resolve();
     if (this.enriching.has(event.id)) return this.enriching.get(event.id);
+    // Display data shows immediately and is saved with the next journal commit
+    // (normally this scan's own aggregation) instead of a separate storage write.
     const task=Promise.resolve().then(()=>this.request.enrichScan(event.scannedValue)).then(display=>{
       if (!display || !this.active) return;
-      return this.serial(async()=>{
-        const index=this.events.events.findIndex(e=>e.id===event.id);
-        if (!this.active || index<0 || this.events.events[index].aggApplied===-1 || this.events.events[index].manuallyMatched) return;
-        const events={...this.events,events:[...this.events.events]};
-        events.events[index]={...events.events[index],shopifyProduct:display};
-        await this.write(this.eventKey,events);this.events=events;this.notify();
-      });
+      this.displays.set(event.id,display);this.displayVersion++;this.notify();
     }).catch(()=>{}).finally(()=>this.enriching.delete(event.id));
     this.enriching.set(event.id,task);return task;
   }
@@ -192,7 +224,7 @@ export class CountState {
           const codes = [...new Set(pending.filter(event => !event.product && !this.items.items[event.productId || this.codes.get(event.scannedValue.toLowerCase())]).map(event => event.scannedValue))];
           // Native search can legitimately miss a POS product. Keep the proven
           // OMS display fallback instead of reducing a matched row to a barcode.
-          const enrichedCodes=new Set(this.events.events.filter(e=>e.shopifyProduct).map(e=>e.scannedValue));
+          const enrichedCodes=new Set(this.events.events.filter(e=>this.display(e)).map(e=>e.scannedValue));
           const batches=this.request.lookupIdentityBatch&&this.request.lookupBatch?
             [[codes.filter(code=>enrichedCodes.has(code)),this.request.lookupIdentityBatch],[codes.filter(code=>!enrichedCodes.has(code)),this.request.lookupBatch]]:[[codes,lookupBatch]];
           await Promise.all(batches.map(async([batch,lookup])=>{if (!batch.length)return;try {
@@ -219,6 +251,7 @@ export class CountState {
         if (!this.active) break;
         if (resolved.length) await this.serial(async () => {
           const items = {...this.items, items: {...this.items.items}, applied: {...this.items.applied}}, events = {...this.events, events: [...this.events.events]};
+          const merged = this.applyDisplays(events), rejected = [];
           // Keep only acknowledgements which the journal has not committed yet.
           items.applied = Object.fromEntries(Object.entries(items.applied).filter(([id]) => events.events.some(e => e.id === Number(id) && e.aggApplied === 0)));
           for (const {event, product} of resolved) {
@@ -231,7 +264,8 @@ export class CountState {
               // A late match before a later explicit correction must not change that correction.
               const superseded = (old?.lastCorrectionId || 0) > event.id;
               const quantity = superseded ? old.quantity : event.mode === 'set' ? event.quantity : (old?.quantity || 0) + event.quantity;
-              if (!Number.isSafeInteger(quantity) || quantity < 0 || quantity > 1000000) throw new Error('Count quantity must be between 0 and 1,000,000.');
+              // Keep only this scan pending with a reason; the rest of the batch still commits.
+              if (!Number.isSafeInteger(quantity) || quantity < 0 || quantity > 1000000) {rejected.push(event.id); continue;}
               const item = {...product, ...old, ...applied.shopifyProduct, productId: product.productId,
                 isRequested: old?.isRequested ?? this.count.countType !== 'DIRECTED_COUNT',
                 uuid: `${this.count.sessionId}:${product.productId}`, inventoryCountImportId: this.count.sessionId,
@@ -251,7 +285,11 @@ export class CountState {
           }
           // This ordering is the crash boundary tested by interrupted-write tests.
           await this.write(this.itemKey, items); this.items = items;
-          await this.write(this.eventKey, events); this.events = events; this.reindex(); this.notify();
+          await this.write(this.eventKey, events); this.events = events;
+          for (const id of merged) this.displays.delete(id);
+          for (const id of rejected) this.failures.set(id, {message: 'This scan would take the product total outside 0 to 1,000,000. Remove it or correct the quantity.',
+            attempts: (this.failures.get(id)?.attempts || 0) + 1, retryAt: Date.now() + 60000});
+          this.reindex(); this.notify();
         });
         else this.notify();
         await new Promise(resolve => setTimeout(resolve, 0));
@@ -309,7 +347,7 @@ export class CountState {
       const event = this.events.events.find(e => e.aggApplied === 0 && (id == null || e.id === id));
       if (!event || this.items.applied[event.id]) throw new Error('This scan must be reconciled, not removed.');
       const events = {...this.events, events: this.events.events.map(e => e.id === event.id ? {...e, aggApplied: -1} : e)};
-      await this.write(this.eventKey, events); this.events = events; this.failures.delete(event.id); this.notify();
+      await this.commitEvents(events); this.failures.delete(event.id); this.notify();
     });
   }
   reconcile(productId, serverQuantity, useServer = false) {
@@ -332,23 +370,35 @@ export class CountState {
     });
   }
   lastUndoable() {
-    const negated = new Set(this.events.events.filter(e => e.negatedScanEventId).map(e => e.negatedScanEventId));
+    const memo = this.memo.undo;
+    if (memo?.events === this.events.events && memo.items === this.items.items) return memo.event;
+    const {negated} = this.journalIndex();
+    let found;
     for (let i = this.events.events.length - 1; i >= 0; i--) {
       const event = this.events.events[i];
       if (event.aggApplied === 1 && event.mode === 'add' && event.quantity > 0 && !negated.has(event.id) &&
-          (this.items.items[event.productId]?.lastCorrectionId || 0) < event.id) return event;
+          (this.items.items[event.productId]?.lastCorrectionId || 0) < event.id) {found = event; break;}
     }
+    this.memo.undo = {events: this.events.events, items: this.items.items, event: found};
+    return found;
   }
   historyPage(search='',page=0,filter='all') {
-    const negated=new Set(this.events.events.filter(e=>e.negatedScanEventId).map(e=>e.negatedScanEventId));
+    const {negated}=this.journalIndex();
     const query=search.trim().toLowerCase();
-    // Event chronology is independent of product order and enrichment updates.
-    const events=this.events.events.filter(e=>(filter!=='unmatched'||e.aggApplied===0)&&(!query||`${e.scannedValue} ${e.shopifyProduct?.title||this.items.items[e.productId]?.title||''}`.toLowerCase().includes(query)))
-      .sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)||b.id-a.id);
+    // Filtering and sorting run once per journal, item map, display or query change;
+    // re-renders and page turns reuse the ordered list.
+    const memo=this.memo.history;
+    let events=memo?.list;
+    if(!(memo&&memo.events===this.events.events&&memo.items===this.items.items&&memo.displayVersion===this.displayVersion&&memo.query===query&&memo.filter===filter)){
+      // Event chronology is independent of product order and enrichment updates.
+      events=this.events.events.filter(e=>(filter!=='unmatched'||e.aggApplied===0)&&(!query||`${e.scannedValue} ${this.display(e)?.title||this.items.items[e.productId]?.title||''}`.toLowerCase().includes(query)))
+        .sort((a,b)=>(b.createdAt||0)-(a.createdAt||0)||b.id-a.id);
+      this.memo.history={events:this.events.events,items:this.items.items,displayVersion:this.displayVersion,query,filter,list:events};
+    }
     const pages=Math.max(1,Math.ceil(events.length/40)),current=Math.min(page,pages-1);
     return {total:events.length,pages,page:current,items:events.slice(current*40,(current+1)*40).map(e=>({...e,
-      title:e.shopifyProduct?.title||this.items.items[e.productId]?.title||e.scannedValue,
-      imageUrl:e.shopifyProduct?.imageUrl||this.items.items[e.productId]?.imageUrl,
+      title:this.display(e)?.title||this.items.items[e.productId]?.title||e.scannedValue,
+      imageUrl:this.display(e)?.imageUrl||this.items.items[e.productId]?.imageUrl,
       matchingFailed:this.failures.has(e.id),
       canUndo:e.aggApplied===1&&e.mode==='add'&&e.quantity>0&&!negated.has(e.id)&&(this.items.items[e.productId]?.lastCorrectionId||0)<e.id}))};
   }
@@ -367,7 +417,7 @@ export class CountState {
         events.events.push({id:events.nextId++,inventoryCountImportId:this.count.sessionId,scannedValue:entry.product.sku||entry.product.productId,productId:entry.product.productId,product:entry.product,
           quantity:entry.quantity,mode:'add',source:'hand-count',batchId:operationId,createdAt:Date.now(),aggApplied:0,staffId:this.audit.staffId,deviceId:this.audit.deviceId});
       }
-      await this.write(this.eventKey,events);this.events=events;this.notify();
+      await this.commitEvents(events);this.notify();
     });
     await this.aggregate();
   }
@@ -378,7 +428,7 @@ export class CountState {
       const event=this.events.events.find(e=>e.id===id&&e.aggApplied===0);
       if(!event||this.items.applied[id])throw new Error('This scan has already changed. Refresh the pending scans.');
       const events={...this.events,events:this.events.events.map(e=>e.aggApplied===0&&e.scannedValue===event.scannedValue&&!this.items.applied[e.id]?{...e,productId:product.productId,product,shopifyProduct:undefined,manuallyMatched:true}:e)};
-      await this.write(this.eventKey,events);this.events=events;this.failures.clear();this.notify();
+      await this.commitEvents(events);this.failures.clear();this.notify();
     });
     await this.aggregate(true);
   }
@@ -390,12 +440,12 @@ export class CountState {
       this.assertCanCount();
       const selected=this.events.events.find(e=>e.id===id);
       if(!selected)throw new Error('This scan is no longer available.');
-      const negated=new Set(this.events.events.filter(e=>e.negatedScanEventId).map(e=>e.negatedScanEventId));
+      const {negated}=this.journalIndex();
       const targets=this.events.events.filter(e=>(all?e.productId===selected.productId:e.id===id)&&e.aggApplied===1&&e.mode==='add'&&e.quantity>0&&!negated.has(e.id)&&(this.items.items[e.productId]?.lastCorrectionId||0)<e.id);
       if(!targets.length)throw new Error('These scans have already been reversed or replaced by a quantity correction.');
       const events={...this.events,events:[...this.events.events]};
       for(const original of targets)events.events.push({id:events.nextId++,inventoryCountImportId:this.count.sessionId,scannedValue:original.scannedValue,productId:original.productId,negatedScanEventId:original.id,quantity:-original.quantity,mode:'add',source:'undo',createdAt:Date.now(),aggApplied:0,staffId:this.audit.staffId,deviceId:this.audit.deviceId});
-      await this.write(this.eventKey,events);this.events=events;this.notify();
+      await this.commitEvents(events);this.notify();
     });
     await this.aggregate();
   }

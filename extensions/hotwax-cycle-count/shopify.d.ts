@@ -158,14 +158,6 @@ declare module './src/FlowParts.jsx' {
 }
 
 //@ts-ignore
-declare module './src/ListProbe.jsx' {
-  const shopify:
-    | import('@shopify/ui-extensions/pos.home.modal.render').Api
-    | import('@shopify/ui-extensions/pos.product-details.action.render').Api;
-  const globalThis: { shopify: typeof shopify };
-}
-
-//@ts-ignore
 declare module './src/CountInputs.jsx' {
   const shopify:
     | import('@shopify/ui-extensions/pos.home.modal.render').Api
@@ -190,7 +182,7 @@ declare module './src/ScanFeedback.jsx' {
 }
 
 //@ts-ignore
-declare module './src/count-probe-paged.js' {
+declare module './src/count-cleanup.js' {
   const shopify:
     | import('@shopify/ui-extensions/pos.home.modal.render').Api
     | import('@shopify/ui-extensions/pos.product-details.action.render').Api;

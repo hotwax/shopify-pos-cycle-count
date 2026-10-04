@@ -10,7 +10,7 @@ A native Shopify POS extension for store cycle counting, with a Shopify-hosted A
 - Inspect scan events in fixed newest-first order, filter unmatched scans, retry or correct matching, and undo individual events. Product sorting does not change event chronology.
 - Submit each session, resolve remaining uncounted products through counting or reviewed **Mark as out of stock** selection, then submit the count for OMS approval. A bulk zero confirmation uses one session even when its requests span multiple batches.
 
-Submitting a count sends it for review. This app does not approve inventory adjustments.
+Submitting a count sends it for review. This app does not approve or apply inventory adjustments. Discarding extra products records a `SKIPPED` review decision for those products only.
 
 ## Architecture
 
@@ -24,9 +24,11 @@ Submitting a count sends it for review. This app does not approve inventory adju
 
 An accepted scan is durably appended before aggregation. Shopify POS product lookup supplies display data when available, while OMS matching establishes the HotWax product ID required for aggregation. OMS product details provide a fallback when native lookup misses. Unmatched events remain available for resolution without blocking other products.
 
-The app uses Shopify Storage API documents with paged scan journals and product checkpoints. It does not rely on IndexedDB, a custom Web Worker, or a service worker. Product and event lists render at most 40 rows per page; network writes use bounded batches. Storage remains finite and shared with other extensions: quota exhaustion refuses new writes while preserving existing scans.
+The app uses Shopify Storage API documents with paged scan journals and product checkpoints. It does not rely on IndexedDB, a custom Web Worker, or a service worker. Product and event lists render at most 40 rows per page; network writes use bounded batches. Shopify allows 100 storage entries per extension, so product checkpoints use one page per 400 products, and opening the app removes local copies HotWax has finished with: discarded sessions, closed or cancelled counts, and submitted or approved sessions whose quantities HotWax confirms. Quota exhaustion refuses new writes while preserving existing scans.
 
-Sessions are scoped to shop, facility and staff. Counting requires a confirmed, unexpired lease for the current POS terminal. Failed lock acquisition or renewal blocks further scanner events. Shopify's background target can sync already-matched quantities while its runtime is available; force-quitting POS cannot guarantee background progress.
+Within one POS runtime, the shop's OMS origin, the OMS login (up to four minutes) and the store context (up to two minutes) are reused, so most actions need one OMS round trip. A rejected login or permission drops them immediately.
+
+Sessions are scoped to shop, facility and staff. Online, counting requires a confirmed, unexpired lease for the current POS terminal. Offline, a terminal keeps counting into its local journal on the lease OMS last confirmed for it; on reconnecting it reclaims the lease, and every sync renews that exact lease before writing, so a takeover elsewhere is reported instead of overwritten. Losing ownership (an OMS rejection) pauses scanning; an unreachable OMS does not, until the lease expires. Shopify's background target can sync already-matched quantities while its runtime is available; force-quitting POS cannot guarantee background progress.
 
 ## Setup
 
@@ -67,9 +69,9 @@ Release only to the intended Shopify app:
 npm run deploy -- --version <release-name> --message '<release-summary>'
 ```
 
-Build and deploy regenerate `shared/oms-build-config.ts` with development flags disabled. Building alone does not release an app. See [Shopify app deploy](https://shopify.dev/docs/api/shopify-cli/app/app-deploy) for the release command. Stop the development preview before checking an installed release; an already-open POS extension may need POS to be relaunched to load the released bundle.
+`shared/oms-build-config.ts` is generated and gitignored: `npm run build` and `npm run deploy` write it with development flags disabled, `npm run dev` writes preview flags, and tests or typechecks only create it when it is missing. Always build and deploy through the npm scripts; running `shopify app build` or `shopify app deploy` directly ships whatever flags are on disk. Building alone does not release an app. See [Shopify app deploy](https://shopify.dev/docs/api/shopify-cli/app/app-deploy) for the release command. Stop the development preview before checking an installed release; an already-open POS extension may need POS to be relaunched to load the released bundle.
 
-The initial implementation has been deployed to a demo store and opened on a physical iPad with the local development server stopped. The current local regression suite contains 69 passing tests. Raw device captures, local test readbacks, historical implementation notes and machine-specific tool configuration are deliberately excluded from this repository.
+The initial implementation has been deployed to a demo store and opened on a physical iPad with the local development server stopped. The current local regression suite contains 86 passing tests. Raw device captures, local test readbacks, historical implementation notes and machine-specific tool configuration are deliberately excluded from this repository.
 
 ## Customer rollout boundaries
 

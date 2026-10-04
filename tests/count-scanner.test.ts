@@ -3,14 +3,15 @@ import { test } from "node:test";
 import {
   subscribeScans,
   countStatus,
-  submissionIncomplete,
+  DUPLICATE_SCAN_MS,
 } from "../extensions/hotwax-cycle-count/src/count-api.js";
 
 // Signal fixtures cover event plumbing, not OMS or physical-scanner validation.
-test("ignores replay but counts repeated barcode events individually", () => {
+test("ignores replay and duplicate emissions but counts repeated physical scans", () => {
   const stale = { data: "barcode", source: "external" };
   let listener;
   let closed = false;
+  let clock = 1000;
   const received = [];
   const scanner = {
     scannerData: {
@@ -26,32 +27,31 @@ test("ignores replay but counts repeated barcode events individually", () => {
       },
     },
   };
-  const unsubscribe = subscribeScans(scanner, (scan) => received.push(scan));
+  const unsubscribe = subscribeScans(scanner, (scan) => received.push(scan), () => clock);
   listener(stale);
   const first = { data: "barcode", source: "external" };
   listener(first);
   listener(first);
+  // Shopify can emit one scan twice as separate objects; that is not a second unit.
+  clock += DUPLICATE_SCAN_MS - 1;
+  listener({ data: "barcode", source: "external" });
+  // A person rescanning the same barcode is always slower than the window.
+  clock += DUPLICATE_SCAN_MS;
+  listener({ data: "barcode", source: "external" });
+  clock += DUPLICATE_SCAN_MS;
   listener({ data: "barcode", source: "external" });
   listener({ data: "", source: "external" });
-  assert.equal(received.length, 2);
+  assert.equal(received.length, 3);
   unsubscribe();
   assert.equal(closed, true);
 });
 test("submitting one session leaves the overall count open", () => {
-  const incomplete = {
+  const submitted = {
     statusId: "SESSION_SUBMITTED",
     countStatusId: "CYCLE_CNT_IN_PRGS",
   };
-  assert.equal(submissionIncomplete(incomplete), false);
-  assert.equal(countStatus(incomplete), "Session submitted");
-  assert.equal(
-    submissionIncomplete({ ...incomplete, countStatusId: "CYCLE_CNT_CMPLTD" }),
-    false,
-  );
-  assert.equal(
-    submissionIncomplete({ ...incomplete, countStatusId: "CYCLE_CNT_CLOSED" }),
-    false,
-  );
+  assert.equal(countStatus(submitted), "Session submitted");
+  assert.equal(countStatus({ ...submitted, countStatusId: "CYCLE_CNT_CMPLTD" }), "Session submitted");
 });
 
 test("first physical event is retained when subscription does not replay", () => {

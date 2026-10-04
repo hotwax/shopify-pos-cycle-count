@@ -60,16 +60,6 @@ export function configuredOrigin(): string {
   return url.origin;
 }
 
-export function requireTestOms() {
-  const origin = configuredOrigin();
-  const localTunnel = extensionConfiguration?.localPreview === true &&
-    new URL(origin).hostname.endsWith('.trycloudflare.com');
-  if (origin !== "https://test-maarg.hotwax.io" && !localTunnel && !(!extensionConfiguration && process.env.NODE_ENV !== "production" &&
-      ["localhost", "127.0.0.1", "[::1]"].includes(new URL(origin).hostname))) {
-    throw new OmsLookupError("OMS writes are limited to test-maarg or a local development server.", 403);
-  }
-}
-
 /** A development preview stays on test data. Released apps use their shop's setup. */
 export function requireCountConnection(shop: string) {
   const origin = configuredOrigin(), domain = new URL(shop).hostname;
@@ -81,10 +71,15 @@ export function requireCountConnection(shop: string) {
   throw new OmsLookupError('This development preview can only save counts in the configured HotWax test stores.', 403);
 }
 
-export type OmsIdentity = {shopifySessionToken: string; shopifyLocationId: unknown; signal?: AbortSignal};
+export type OmsIdentity = {shopifySessionToken: string; shopifyLocationId: unknown; signal?: AbortSignal;
+  /** An OMS token from an earlier login in this POS runtime; it skips the app-bridge exchange. */
+  omsToken?: string;
+  /** Read-phase budget. Large summaries may extend it; writes keep their own deadline. */
+  readBudgetMs?: number};
 
 /** One authenticated operation: lazy login, bounded I/O and deduplicated reads.
- * Nothing survives the operation. POST clears reads so write verification is fresh.
+ * Only the OMS token may be reused by the caller. POST clears reads so write
+ * verification is fresh.
  */
 export class OmsConnection {
   private origin = configuredOrigin();
@@ -99,10 +94,13 @@ export class OmsConnection {
 
   constructor(identity: OmsIdentity, clock = () => performance.now(), arrivedAt = clock()) {
     this.identity = identity; this.clock = clock; this.started = arrivedAt;
+    if (identity.omsToken) this.login = Promise.resolve(identity.omsToken);
   }
   get mutationStarted() { return this.writeStarted; }
 
   async authenticate() { await this.token(); }
+  /** The bearer token for reuse by a later operation of the same identity. */
+  accessToken(): Promise<string> { return this.token(); }
 
   private async request(path: string, init: RequestInit, mutation = false): Promise<unknown> {
     if (!path.startsWith("/rest/") || path.includes("\\") || path.includes("#") ||
@@ -112,7 +110,7 @@ export class OmsConnection {
     if (this.active >= 6) await new Promise<void>((resolve) => this.waiting.push(resolve));
     else this.active++;
     try {
-      const remaining = this.started + (this.writeStarted ? 48000 : 20000) - this.clock();
+      const remaining = this.started + (this.writeStarted ? 48000 : Math.min(this.identity.readBudgetMs ?? 20000, 45000)) - this.clock();
       if (remaining <= 0) throw new OmsLookupError('OMS operation exceeded its time budget before this request.', 503);
       if (mutation) {
         if (!this.writeStarted && this.identity.signal?.aborted) throw new OmsLookupError("OMS operation was cancelled before writing.", 503);

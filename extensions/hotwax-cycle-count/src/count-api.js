@@ -1,4 +1,4 @@
-import {openDirectOms} from '../../../shared/direct-oms';
+import {forgetOmsLogin,openDirectOms} from '../../../shared/direct-oms';
 import {handleCount} from '../../../shared/oms-count';
 import {LOCAL_OMS_PREVIEW} from '../../../shared/oms-build-config';
 import {createScanProductLookup} from './scan-products';
@@ -17,28 +17,54 @@ export async function simulateOmsOutage(enabled) {
   else await shopify.storage.delete(outageKey());
 }
 
-/** @returns {Promise<any>} */
-export async function countRequest(action, payload = {}) {
+// Shop, facility, profile, permissions and preferences change rarely. Reusing
+// them (and the OMS login, see direct-oms) leaves one round trip per action.
+const contexts = new Map();
+// Product summaries and full session loads may need longer than the default read budget.
+const LONG_READS = new Set(['progress', 'detail']);
+
+/**
+ * @param {string} action
+ * @param {Record<string, any>} [payload]
+ * @param {{timeoutMs?: number, signal?: AbortSignal}} [options]
+ * @returns {Promise<any>}
+ */
+export async function countRequest(action, payload = {}, options = {}) {
   const owner = currentCountOwner();
   const session = shopify.session.currentSession;
   const staffId = shopify.session.staffMember.value?.id;
   const assertOwner = () => {if (currentCountOwner() !== owner) throw new Error('The POS operator or store changed. Saved scans stay with their original operator.');};
   if (await isOmsOutageSimulated()) throw new Error('Demo test: OMS connection is unavailable. Scans remain on this device.');
   if (shopify.connectivity.current.value.internetConnected !== 'Connected')
-    throw new Error('POS is offline. Keep counting saved products; matching and sync resume when connected.');
+    throw new Error('POS is offline. Saved scans stay on this device; matching and sync resume when connected.');
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 55000);
-  try {
-    const {oms, identity} = await openDirectOms(shopify.session,
-      session.locationId, controller.signal);
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 55000);
+  const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
+  const attempt = async () => {
+    const {oms, identity, loginKey, reusedLogin} = await openDirectOms(shopify.session, session.locationId,
+      {signal, storage: shopify.storage, readBudgetMs: LONG_READS.has(action) ? 45000 : undefined});
     assertOwner();
     const mutate = oms.mutate.bind(oms);
     oms.mutate = (path,data,method='POST') => {assertOwner(); return mutate(path,data,method);};
-    const result = await handleCount({...identity, deviceId:currentDeviceId(),
-      shopifyStaffMemberId: staffId},
-      {...payload, action}, oms);
-    assertOwner();
-    return result;
+    try {
+      const result = await handleCount({...identity, deviceId:currentDeviceId(),
+        shopifyStaffMemberId: staffId},
+        {...payload, action}, oms, {key: loginKey, entries: contexts});
+      assertOwner();
+      return result;
+    } catch (error) {
+      // OMS rejected a reused login or permissions changed: forget both and,
+      // for an expired login that has not started writing, sign in once more.
+      if (error?.status === 401 || error?.status === 403) {
+        forgetOmsLogin(loginKey);
+        for (const key of contexts.keys()) if (key.startsWith(`${loginKey}|`)) contexts.delete(key);
+      }
+      if (error?.status === 401 && reusedLogin && !oms.mutationStarted) error.retryLogin = true;
+      throw error;
+    }
+  };
+  try {
+    return await attempt().catch(error => {if (error?.retryLogin) return attempt(); throw error;});
   } finally {
     clearTimeout(timer);
   }
@@ -46,10 +72,10 @@ export async function countRequest(action, payload = {}) {
 
 countRequest.lookupBatch = codes => countRequest("lookupBatch", {codes});
 
-export function bindCountRequest(owner) {
-  const request = (action,payload) => {
+export function bindCountRequest(owner, options = {}) {
+  const request = (action,payload,callOptions) => {
     if (currentCountOwner() !== owner) return Promise.reject(new Error('The POS operator changed. Reopening your counts…'));
-    return countRequest(action,payload);
+    return countRequest(action,payload,{...options,...callOptions});
   };
   request.lookupBatch = codes => request('lookupBatch',{codes});
   request.lookupIdentityBatch = codes => request('lookupIdentityBatch',{codes});
@@ -70,17 +96,22 @@ export function currentDeviceId() {
   return `POS_${value}`;
 }
 
-// Skip subscription replay, while counting repeated physical scans separately.
-export function subscribeScans(scanner, receive) {
-  let last = scanner.scannerData.current.value;
+// Shopify notes that the scanner subscription can fire more than once for one
+// scan, and bridged values are new objects. Skip the subscribe-time replay and
+// the same code from the same source inside a window far shorter than a person
+// can rescan; repeated physical scans still count as separate units.
+export const DUPLICATE_SCAN_MS = 80;
+export function subscribeScans(scanner, receive, now = () => Date.now()) {
+  let last = scanner.scannerData.current.value, seen = {data: '', source: '', at: -Infinity};
   return scanner.scannerData.current.subscribe((scan) => {
     if (!scan?.data || scan === last) return;
     last = scan;
+    const at = now();
+    if (scan.data === seen.data && scan.source === seen.source && at - seen.at < DUPLICATE_SCAN_MS) return;
+    seen = {data: scan.data, source: scan.source, at};
     receive(scan);
   });
 }
-
-export function submissionIncomplete(_count = undefined) { return false; }
 
 export function workStatus(status) {
   return {CYCLE_CNT_CREATED:"Scheduled",CYCLE_CNT_IN_PRGS:"In progress",CYCLE_CNT_CMPLTD:"Awaiting approval",CYCLE_CNT_CLOSED:"Reviewed",CYCLE_CNT_CNCL:"Cancelled"}[status] || status;
@@ -90,7 +121,6 @@ export {countTypeName} from '../../../shared/count-types';
 export function countStatus(count) {
   if (count.countStatusId === "CYCLE_CNT_CLOSED") return "Reviewed";
   if (count.countStatusId === "CYCLE_CNT_CNCL") return "Cancelled";
-  if (submissionIncomplete(count)) return "Submission incomplete";
   return (
     {
       SESSION_CREATED: "Draft",

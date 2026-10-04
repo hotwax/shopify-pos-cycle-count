@@ -3,13 +3,18 @@ import {countStatus,countTypeName,workStatus} from './count-api';
 import {ProductList,CompactPager} from './ProductList.jsx';
 import {ActionRow,BackButton,amount} from './FlowParts.jsx';
 const operationId=()=>Array.from({length:15},()=>Math.floor(Math.random()*16).toString(16)).join('');
+const sameProducts=(a,b)=>[...a].sort().join(',')===[...b].sort().join(',');
+// The last product summary per count, shown at once while a fresh one loads.
+const progressCache=new Map();
 
 export function CountFlow({workEffortId,openSession,back,storage,owner,request,setHeader}) {
   const [info,setInfo]=useState(null),[progress,setProgress]=useState(null),[view,setView]=useState('summary');
   const [error,setError]=useState(''),[busy,setBusy]=useState(true),[area,setArea]=useState('register'),[page,setPage]=useState(0);
   const [selected,setSelected]=useState(new Set()),[decision,setDecision]=useState(''),[product,setProduct]=useState(null),[contributions,setContributions]=useState(null);
   const [contribution,setContribution]=useState(null),[contributionQuantity,setContributionQuantity]=useState(''),[decisionProgress,setDecisionProgress]=useState('');
-  const [completionMessage,setCompletionMessage]=useState('');
+  const [completionMessage,setCompletionMessage]=useState(''),[savedDecision,setSavedDecision]=useState(false);
+  const [sessionName,setSessionName]=useState(''),[pendingCreate,setPendingCreate]=useState(null);
+  const cacheKey=`${owner}:${workEffortId}`,decisionKey=`hotwax-count:${owner}:decision:${workEffortId}`,createKey=`hotwax-count:${owner}:create-session:${workEffortId}`;
   const name=useRef(''),active=useRef(true),running=useRef(false),progressRequest=useRef(0);
   const [progressBusy,setProgressBusy]=useState(false),[progressError,setProgressError]=useState(''),[sessionPage,setSessionPage]=useState(0);
   const [locks,setLocks]=useState({}),[lockError,setLockError]=useState(''),[lockRefresh,setLockRefresh]=useState(0);
@@ -25,6 +30,8 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
     setProgressBusy(true);setProgressError('');
     try {
       const result=await request('progress',{workEffortId});
+      progressCache.delete(cacheKey);progressCache.set(cacheKey,result);
+      while(progressCache.size>10)progressCache.delete(progressCache.keys().next().value);
       if(active.current&&sequence===progressRequest.current){setInfo(result);setProgress(result);}
     } catch(failure) {
       if(active.current&&sequence===progressRequest.current)setProgressError(failure instanceof Error?failure.message:'Could not load the product summary.');
@@ -40,7 +47,13 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
     if(result.canPreview)void loadProducts();
     else {progressRequest.current++;setProgress(null);setProgressBusy(false);setProgressError('');}
   }
-  useEffect(()=>{active.current=true;run(async()=>{await refresh();const pending=await storage.get(`hotwax-count:${owner}:decision:${workEffortId}`);if(pending&&active.current){setSelected(new Set(pending.productIds));setDecision(pending.action);setView('confirm');}});return()=>{active.current=false;progressRequest.current++;};},[workEffortId]);
+  useEffect(()=>{
+    active.current=true;
+    const cached=progressCache.get(cacheKey);
+    if(cached){setInfo(cached);setProgress(cached);}
+    run(async()=>{await refresh();const pending=await storage.get(decisionKey);if(pending&&active.current){setSelected(new Set(pending.productIds));setDecision(pending.action);setSavedDecision(true);setView('confirm');}});
+    return()=>{active.current=false;progressRequest.current++;};
+  },[workEffortId]);
   const lockIds=info?.statusId==='CYCLE_CNT_IN_PRGS'?info.sessions.slice(sessionPage*20,(sessionPage+1)*20).filter(session=>['SESSION_CREATED','SESSION_ASSIGNED'].includes(session.statusId)).map(session=>session.sessionId).join(','):'';
   useEffect(()=>{
     let stopped=false,timer=0;
@@ -64,33 +77,63 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
   }
   const heading=({summary:info?.name||'Count summary',create:'Start a new session',product:product?.title||product?.sku||'Product details',editContribution:'Session contribution',zero:'Mark as out of stock',extras:'Extra products',confirm:decision==='completeCount'?'Send count for approval':'Review selected products'})[view];
   useEffect(()=>{setHeader?.({heading,subheading:view==='summary'?'Count summary':info?.name||'Count summary'});},[heading,view,info?.name,setHeader]);
+  async function showCreate() {
+    // An unfinished earlier attempt is offered for retry with its own name and location.
+    let pending=null;
+    try {pending=await storage.get(createKey);} catch { /* Start a fresh session below. */ }
+    if(!active.current)return;
+    setPendingCreate(pending||null);name.current=pending?.name||'';setSessionName(pending?.name||'');if(pending?.area)setArea(pending.area);
+    setView('create');
+  }
   async function create() {
-    const key=`hotwax-count:${owner}:create-session:${workEffortId}`;
-    let pending=await storage.get(key);
-    if(!pending){pending={workEffortId,operationId:operationId(),name:name.current.trim(),area};if(!pending.name)throw new Error('Enter a session name.');await storage.set(key,pending);}
+    let pending=await storage.get(createKey);
+    const typed=name.current.trim();
+    // A changed name or location is a new session. The saved operation ID only
+    // makes a retry of the same session idempotent.
+    if(pending&&((typed&&typed!==pending.name)||area!==pending.area)){await storage.delete(createKey);pending=null;setPendingCreate(null);}
+    if(!pending){pending={workEffortId,operationId:operationId(),name:typed,area};if(!pending.name)throw new Error('Enter a session name.');await storage.set(createKey,pending);}
     for(let attempt=0;attempt<6;attempt++) {
       const result=await request('createSession',pending);
-      if(!result.preparing){await storage.delete(key);if(active.current)await openSession(result.session.sessionId,result.session);return;}
+      if(!result.preparing){await storage.delete(createKey);setPendingCreate(null);if(active.current)await openSession(result.session.sessionId,result.session);return;}
       setError(`Preparing your list · ${result.remaining} products remaining.`);
     }
     throw new Error('Your session is saved. Choose Start counting again to finish loading its product list.');
   }
+  async function cancelDecision() {
+    await storage.delete(decisionKey);
+    if(!active.current)return;
+    setSavedDecision(false);setDecisionProgress('');setSelected(new Set());setView('summary');await refresh(true);
+  }
   async function confirm() {
     if(decision==='completeCount'){await request(decision,{workEffortId});await refresh(true);setView('summary');return;}
-    const key=`hotwax-count:${owner}:decision:${workEffortId}`;
+    const key=decisionKey;
     let pending=await storage.get(key);
-    if(!pending){pending={action:decision,workEffortId,operationId:operationId(),productIds:[...selected]};await storage.set(key,pending);}
-    if(pending.action!==decision||[...pending.productIds].sort().join(',')!==[...selected].sort().join(','))throw new Error('Finish the saved decision with the same products before making another.');
+    if(pending&&!(pending.action===decision&&sameProducts(pending.productIds,selected))){
+      // An unsent decision is simply replaced; part of a sent one must be finished or cancelled.
+      if(pending.completed)throw new Error('Part of an earlier decision is already saved in HotWax. Finish it with the same products, or cancel it.');
+      await storage.delete(key);pending=null;
+    }
+    if(!pending){pending={action:decision,workEffortId,operationId:operationId(),productIds:[...selected]};await storage.set(key,pending);setSavedDecision(true);}
     const batches=Math.ceil(pending.productIds.length/25);
     pending.completed=pending.completed||0;
     for(let index=pending.completed;index<batches;index++){
       setDecisionProgress(`Saving batch ${index+1} of ${batches}`);
       const batchId=pending.operationId.slice(0,10)+index.toString(16).padStart(5,'0');
       // Zero-count session identity belongs to the whole confirmation, including retries.
-      await request(pending.action,{...pending,operationId:pending.action==='confirmZero'?pending.operationId:batchId,productIds:pending.productIds.slice(index*25,(index+1)*25)});
+      try {await request(pending.action,{...pending,operationId:pending.action==='confirmZero'?pending.operationId:batchId,productIds:pending.productIds.slice(index*25,(index+1)*25)});}
+      catch(failure){
+        // HotWax rejected the selection itself (for example, a product was counted
+        // meanwhile). Retrying cannot succeed, so clear it and show the current list.
+        const status=failure instanceof Error&&'status' in failure?failure.status:undefined;
+        if(status!==409)throw failure;
+        await storage.delete(key);setSavedDecision(false);setDecisionProgress('');setSelected(new Set());
+        if(active.current)setView(pending.action==='confirmZero'?'zero':'extras');
+        await refresh(true);
+        throw new Error(`${failure instanceof Error?failure.message:'HotWax rejected this selection.'} The saved selection was cleared; review the products again.`);
+      }
       pending.completed=index+1;await storage.set(key,pending);
     }
-    await storage.delete(key);setDecisionProgress('');await refresh(true);
+    await storage.delete(key);setSavedDecision(false);setDecisionProgress('');await refresh(true);
     setCompletionMessage(decision==='confirmZero'?`${amount(selected.size,'product')} marked as out of stock. Zero quantities have been recorded.`:`${amount(selected.size,'extra product')} discarded.`);
     setSelected(new Set());setView('summary');
   }
@@ -131,7 +174,7 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
       </s-stack></s-section>}
       {info.statusId==='CYCLE_CNT_CMPLTD'&&<s-banner tone="success" heading="Sent to HotWax for approval"/>}
       <s-section><s-stack direction="block" gap="base">
-        {info.canCreateSession&&<s-button variant="primary" disabled={busy} onClick={()=>setView('create')}>Start a new session</s-button>}
+        {info.canCreateSession&&<s-button variant="primary" disabled={busy} onClick={()=>run(showCreate)}>Start a new session</s-button>}
         <s-heading>Sessions · {countingSessions} still counting</s-heading>
         <s-stack direction="block" gap="none">
           {!info.sessions.length&&<s-text color="subdued">No sessions yet. Start a new session.</s-text>}
@@ -162,7 +205,8 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
     {info&&view==='create'&&<>
       <s-section><s-stack direction="block" gap="base">
         <s-text>Each person counts in a separate session. HotWax adds the sessions together.</s-text>
-        <s-text-field label="Session name" placeholder="For example, Front display" disabled={busy} onInput={e=>{name.current=e.currentTarget.value;}}/>
+        {pendingCreate&&<s-text color="subdued">An earlier attempt to start “{pendingCreate.name}” did not finish. Start counting to finish it, or change the name or location to start a different session.</s-text>}
+        <s-text-field label="Session name" placeholder="For example, Front display" value={sessionName} disabled={busy} onInput={e=>{name.current=e.currentTarget.value;setSessionName(e.currentTarget.value);}}/>
         <s-text type="strong">Session location</s-text><s-choice-list values={[area]} onChange={e=>setArea(e.currentTarget.values[0])}>{info.areas.map(a=><s-choice key={a.id} value={a.id} disabled={busy}>{a.name}</s-choice>)}</s-choice-list>
         {info.type==='DIRECTED_COUNT'&&<s-text color="subdued">Your requested product list loads automatically.</s-text>}
         {info.type==='DYNAMIC_COUNT'&&<s-text color="subdued">Start with an empty list and count products in this session. HotWax adds your quantities to the other sessions for the same products.</s-text>}
@@ -186,6 +230,7 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
         {decision==='completeCount'&&info?.type==='DYNAMIC_COUNT'&&<s-text type="strong">Confirm that these totals include every unit of each listed product in the store, including the sales floor and back stock. Products outside this list will be left unchanged.</s-text>}
       </s-stack></s-section>
       <s-button variant="primary" disabled={busy||(decision!=='completeCount'&&!selected.size)} onClick={()=>run(confirm)}>{decision==='completeCount'?'Send for approval':decision==='confirmZero'?'Confirm out of stock':'Discard selected products'}</s-button>
+      {savedDecision&&decision!=='completeCount'&&<s-button disabled={busy} onClick={()=>run(cancelDecision)}>Cancel saved decision</s-button>}
       {decision!=='completeCount'&&<ProductList items={reviewItems} filters={false}/>}
     </>}
     {view==='product'&&product&&<s-section><s-stack direction="block" gap="base">

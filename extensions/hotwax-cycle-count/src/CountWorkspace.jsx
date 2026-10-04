@@ -1,7 +1,7 @@
 import {useCallback,useEffect,useRef,useState} from 'preact/hooks';
 import {CountState,decodeDocument} from './count-state';
 import {CountStorage} from './count-storage';
-import {CountLease,leaseKey} from './count-lease';
+import {CountLease} from './count-lease';
 import {enterForeground} from './count-coordination';
 import {statusKey} from './count-background';
 import {bindCountRequest,currentCountOwner,currentAuditContext,countStatus,countTypeName,workStatus,isOmsOutageSimulated,simulateOmsOutage,subscribeScans} from './count-api';
@@ -11,16 +11,31 @@ import {HandCount} from './HandCount.jsx';
 import {CatalogPicker} from './CatalogPicker.jsx';
 import {ProductList,CompactPager} from './ProductList.jsx';
 import {ActionRow,QuantityEditor,BackButton,amount} from './FlowParts.jsx';
-import {ListProbe} from './ListProbe.jsx';
 import {HidBarcodeEntry} from './CountInputs.jsx';
 import {ScanEventRow} from './ScanEventRow.jsx';
 import {ScanFeedback} from './ScanFeedback.jsx';
-import {probePagedStorage} from './count-probe-paged';
+import {pruneLocalSessions,removeLocalSession,localCopyRemovable} from './count-cleanup';
+import {CountListIndex} from './count-list';
 import {LOCAL_OMS_PREVIEW} from '../../../shared/oms-build-config';
 
 const message=f=>f instanceof Error?f.message:'Could not complete this action. Your saved scans are retained.';
 const editable=status=>['SESSION_CREATED','SESSION_ASSIGNED'].includes(status);
 const sessionTabs=[['all','All products'],['uncounted','Uncounted'],['scans','Scan events'],['counted','Counted']];
+// One table drives page titles, the Back target and its label. Targets:
+// 'from' returns to the screen that started an open, 'summary' leaves the
+// session for its count summary, 'session' is the session's current detail
+// view and 'unmatched' is its unmatched-scan list.
+const ROUTES={
+  opening:{title:'Opening session',back:'from'},home:{title:'Cycle Count'},new:{title:'Create count'},hand:{title:'Hand count'},
+  match:{title:'Match OMS product',back:'issue'},editSession:{title:'Edit session',back:'options'},discard:{title:'Discard session',back:'options'},
+  forceRelease:{title:'Take over session',back:'options'},camera:{title:'Camera counting',back:'options'},cameraConfirm:{title:'Confirm quantity'},
+  work:{title:'Count summary'},count:{back:'summary'},readonly:{back:'summary'},submitted:{title:'Session submitted',back:'summary'},
+  context:{title:'Count this product',back:'summary'},product:{title:'Count quantity',back:'session'},issue:{title:'Check this scan',back:'unmatched'},
+  compare:{title:'Resolve quantity'},options:{},saved:{title:'Saved sessions',back:'options'},remove:{title:'Remove local copy',back:'options'},
+  diagnostics:{title:'Diagnostics',back:'options'},
+};
+const BACK_LABELS={summary:'Count summary',session:'Session details'};
+const OPEN_CANCELLED=Symbol('open cancelled');
 
 export function CountWorkspace({owner,setHeader}) {
   const [route,setRoute]=useState('home'),[workId,setWorkId]=useState(null),[history,setHistory]=useState(null),[group,setGroup]=useState('active');
@@ -33,14 +48,18 @@ export function CountWorkspace({owner,setHeader}) {
   const [leaseNow,setLeaseNow]=useState(Date.now());
   const [showLockDetails,setShowLockDetails]=useState(false);
   const [sources,setSources]=useState(shopify.scanner.sources.current.value),[outage,setOutage]=useState(false),[productId,setProductId]=useState(null);
-  const [contextProduct,setContextProduct]=useState(null),[conflicts,setConflicts]=useState([]),[issueId,setIssueId]=useState(null),[localPage,setLocalPage]=useState(0),[probe,setProbe]=useState('');
+  const [contextProduct,setContextProduct]=useState(null),[conflicts,setConflicts]=useState([]),[issueId,setIssueId]=useState(null),[localPage,setLocalPage]=useState(0);
   const [scanPage,setScanPage]=useState(0),[scanSearch,setScanSearch]=useState(''),[scanFilter,setScanFilter]=useState('all');
   const [sessionTab,setSessionTab]=useState('all');
   const [editName,setEditName]=useState(''),[editArea,setEditArea]=useState('register'),[cameraMode,setCameraMode]=useState('rapid'),[cameraCode,setCameraCode]=useState(''),[cameraQuantity,setCameraQuantity]=useState('1'),[cameraProduct,setCameraProduct]=useState(null);
   const cameraRef=useRef({mode:'rapid',code:'',at:0});
   cameraRef.current.mode=cameraMode;
-  const storage=useRef(new CountStorage(shopify.storage)).current,request=useRef(bindCountRequest(owner)).current;
+  const services=useRef(null);
+  if(!services.current)services.current={storage:new CountStorage(shopify.storage),request:bindCountRequest(owner),listIndex:new CountListIndex()};
+  const {storage,request}=services.current;
   const engine=useRef(null),ownership=useRef(null),alive=useRef(true),running=useRef(false),gate=useRef(false),latest=useRef(null),context=useRef(null);
+  // Journal access waits for the background uploader; showing counts does not.
+  const foreground=useRef(null),pruning=useRef(Promise.resolve()),removal=useRef(Promise.resolve()),opened=useRef(false),cancelOpen=useRef(null);
   const key=`hotwax-count:${owner}`;
   const listMemory=useRef({search:'',view:'all',page:0});
   const selectProduct=useCallback(item=>{setProductId(item.productId);go('product');},[]);
@@ -48,14 +67,15 @@ export function CountWorkspace({owner,setHeader}) {
   const hasScanLock=()=>own()&&!!engine.current?.active&&!!engine.current.count?.editable&&!!ownership.current?.canScan(engine.current.count.sessionId,currentAuditContext().deviceId);
   const canCount=!!count?.editable&&hasScanLock();
   const leaseActive=!!lease&&!lease.available&&(lease.expiresAt==null||lease.expiresAt>leaseNow);
+  const offlineCounting=(!connected||outage)&&canCount;
   const lockUnverified=!connected||outage||!!leaseProblem||!lease||!ownership.current?.confirmed;
-  const lockLabel=lockUnverified?'Lock needs recheck':!leaseActive?'Session not locked':lease.owned?'Locked to this terminal':'Locked on another terminal';
+  const lockLabel=offlineCounting?'Offline · saving on this terminal':lockUnverified?'Lock needs recheck':!leaseActive?'Session not locked':lease.owned?'Locked to this terminal':'Locked on another terminal';
   const lockTone=lockUnverified||!leaseActive?'warning':lease.owned?'success':'critical';
   const sessionRoute=count?.statusId==='SESSION_SUBMITTED'?'submitted':count?.editable?'count':'readonly';
   latest.current={route,count,stats,canCount,busy,connected,outage,hidMode};
   gate.current=canCount&&!busy&&route==='count';
-  const titles={opening:'Opening session',home:'Cycle Count',new:'Create count',hand:'Hand count',match:'Match OMS product',editSession:'Edit session',discard:'Discard session',forceRelease:'Take over session',camera:'Camera counting',cameraConfirm:'Confirm quantity',work:'Count summary',count:count?.name||'Count items',readonly:count?.name||'Session details',product:'Count quantity',submitted:'Session submitted',issue:'Check this scan',compare:'Resolve quantity',options:count?'Session options':'Count options',saved:'Saved sessions',remove:'Remove local copy',diagnostics:'Diagnostics',probe:'Large-list check',context:'Count this product'};
-  useEffect(()=>{if(!['work','hand'].includes(route))setHeader({heading:titles[route]||'Cycle Count',subheading:history?`${history.facilityName} · ${history.userName}`:''});},[route,count?.name,history?.facilityName,history?.userName]);
+  const title=route==='count'?count?.name||'Count items':route==='readonly'?count?.name||'Session details':route==='options'?(count?'Session options':'Count options'):ROUTES[route]?.title||'Cycle Count';
+  useEffect(()=>{if(!['work','hand'].includes(route))setHeader({heading:title,subheading:history?`${history.facilityName} · ${history.userName}`:''});},[route,count?.name,history?.facilityName,history?.userName]);
   function go(next) {gate.current=false;shopify.scanner.hideCameraScanner();setError('');setMatchingFeedback(null);setRoute(next);}
   function selectSessionTab(next) {
     if(!sessionTabs.some(([id])=>id===next))return;
@@ -65,7 +85,7 @@ export function CountWorkspace({owner,setHeader}) {
   async function run(fn) {
     if(running.current||!own())return;
     running.current=true;setBusy(true);setError('');gate.current=false;
-    try {return await fn();}catch(failure){if(own())setError(message(failure));}
+    try {return await fn();}catch(failure){if(own()&&failure!==OPEN_CANCELLED)setError(message(failure));}
     finally{running.current=false;if(own())setBusy(false);}
   }
   async function refresh(pageIndex=0,selectedGroup=group) {
@@ -83,7 +103,8 @@ export function CountWorkspace({owner,setHeader}) {
     await previous?.tail.catch(()=>{});
     if(ownership.current)ownership.current.active=false;
   }
-  async function attach(result) {
+  async function attach(result,claimed=undefined) {
+    await foreground.current;
     await settle();if(!own())return;
     setStats(null);setLease(null);setLeaseProblem('');setShowLockDetails(false);setSyncError('');setConflicts([]);setLastSynced(null);
     listMemory.current={search:'',view:'all',page:0};
@@ -91,9 +112,10 @@ export function CountWorkspace({owner,setHeader}) {
     const selected=context.current;
     if(selected&&result.editable&&!result.items.some(item=>item.productId===selected.productId))
       result={...result,items:[...result.items,{...selected,quantity:null,isRequested:result.countType!=='DIRECTED_COUNT'}]};
-    const claim=new CountLease(storage,owner,request,value=>{if(own())setLease(value);});
+    const claim=new CountLease(storage,owner,request,value=>{if(own())setLease(value);},
+      ()=>shopify.connectivity.current.value.internetConnected!=='Connected'||!!latest.current?.outage);
     ownership.current=claim;
-    if(result.editable)try{await claim.open(result.sessionId,!latest.current.connected||await isOmsOutageSimulated());}catch(failure){if(own())setLeaseProblem(message(failure));}
+    if(result.editable)try{await claim.open(result.sessionId,!latest.current.connected||await isOmsOutageSimulated(),claimed);}catch(failure){if(own())setLeaseProblem(message(failure));}
     const send=(action,payload)=>['saveBatch','submit','editSession','discardSession'].includes(action)?claim.write(action,payload):request(action,payload);
     send.lookupBatch=request.lookupBatch;
     send.lookupIdentityBatch=request.lookupIdentityBatch;
@@ -116,15 +138,28 @@ export function CountWorkspace({owner,setHeader}) {
       // Acknowledge the tap before OMS, lease or local-storage work starts.
       setOpening({sessionId,name:provided?.name||name||catalog.find(item=>item.sessionId===sessionId)?.name||'Session',from:route==='opening'?opening.from:route});
       setHidMode(false);go('opening');
+      // Back cancels the open at any await below; a late response is ignored.
+      const cancelled=new Promise((_,reject)=>{cancelOpen.current=()=>reject(OPEN_CANCELLED);});
+      cancelled.catch(()=>{});
+      const step=work=>Promise.race([work,cancelled]);
+      const online=latest.current.connected&&!await isOmsOutageSimulated();
+      // The lease claim and the session detail are independent, so start both now.
+      const claimed=online&&provided?.editable!==false?request('leaseClaim',{sessionId}):undefined;
+      claimed?.catch(()=>{});
       let result=provided;
-      if(!result)try{result=await request('detail',{sessionId});}catch(failure){
-        if(latest.current.connected&&!await isOmsOutageSimulated())throw failure;
+      if(!result)try{result=await step(request('detail',{sessionId}));}catch(failure){
+        if(failure===OPEN_CANCELLED||online)throw failure;
         const saved=await storage.get(`${key}:sessions`),entry=saved?.sessions.find(item=>item.sessionId===sessionId);
         const cached=entry&&decodeDocument(await storage.get(entry.itemKey));
         if(!cached?.count)throw failure;
         result={...cached.count,items:Object.values(cached.items)};
       }
-      await attach(result);
+      if(claimed)await step(claimed.catch(()=>{}));
+      // Cleanup stops at its next session; only a removal already under way is awaited.
+      opened.current=true;
+      await step(Promise.all([foreground.current,removal.current.catch(()=>{})]));
+      cancelOpen.current=null;
+      await attach(result,result.editable?claimed:undefined);
     });
   }
   async function leave(toWork=true) {
@@ -198,27 +233,38 @@ export function CountWorkspace({owner,setHeader}) {
     await run(async()=>{
       const state=engine.current;
       if(state.syncing)await state.syncing;if(state.aggregating)await state.aggregating;await state.tail;
-      if(state.events.events.some(e=>e.aggApplied===0)||state.itemList.some(i=>i.revision!==i.syncedRevision))throw new Error('Sync and resolve all scans before removing a local copy.');
-      const remote=await request('detail',{sessionId:count.sessionId});
-      if(remote.editable||remote.statusId!=='SESSION_SUBMITTED'||state.itemList.some(i=>!remote.items.some(saved=>saved.productId===i.productId&&saved.quantity===i.quantity)))throw new Error('HotWax has not confirmed every submitted quantity. Your local copy was kept.');
-      state.active=false;await storage.removeDocument(state.eventKey);await storage.removeDocument(state.itemKey);
-      await storage.delete(`${state.itemKey}:receipts`);await storage.delete(leaseKey(owner,count.sessionId));
-      const saved=await storage.get(`${key}:sessions`);
-      await storage.set(`${key}:sessions`,{...saved,active:null,sessions:saved.sessions.filter(s=>s.sessionId!==count.sessionId)});
+      const remote=await request('localCopyStatus',{sessionId:count.sessionId});
+      const local={pending:state.events.events.filter(e=>e.aggApplied===0).length,dirty:state.itemList.filter(i=>i.revision!==i.syncedRevision).length,items:state.itemList};
+      if(!localCopyRemovable(remote,local))throw new Error(remote.editable?'This session is open in HotWax. Sync and submit it before removing the local copy.':'HotWax has not confirmed every submitted quantity. Your local copy was kept.');
+      state.active=false;
+      await removeLocalSession(storage,owner,{sessionId:count.sessionId,eventKey:state.eventKey,itemKey:state.itemKey});
       engine.current=null;setCount(null);setStats(null);go('home');await refresh();
     });
   }
   useEffect(()=>{
-    let releaseForeground=async()=>{},stopped=false;
+    // Counts load immediately. Only journal work (attach) waits for a background
+    // upload that is already in flight to finish.
+    foreground.current=enterForeground(shopify.storage,owner);
+    foreground.current.catch(()=>{});
     (async()=>{
-      releaseForeground=await enterForeground(shopify.storage,owner);
-      if(stopped){await releaseForeground();return;}
       if(LOCAL_OMS_PREVIEW)setOutage(await isOmsOutageSimulated());
       if(shopify.product?.variantId)try{const selected=await request('contextProduct',{variantId:shopify.product.variantId});if(own()){context.current=selected;setContextProduct(selected);}}catch(failure){if(own())setError(message(failure));}
       await refresh();
+      // Drop finished local copies so the register stays within Shopify's storage limit.
+      pruning.current=foreground.current.then(()=>pruneLocalSessions({storage,owner,request,keep:engine.current?.count?.sessionId,
+        isCurrent:()=>own()&&!opened.current,track:task=>(removal.current=task)}))
+        .then(removed=>{if(removed&&own())return storage.get(`${key}:sessions`).then(local=>{if(own())setCatalog(local?.sessions||[]);});}).catch(()=>{});
     })().catch(failure=>{if(own())setError(message(failure));}).finally(()=>{if(own())setBusy(false);});
     const unSources=shopify.scanner.sources.current.subscribe(setSources);
-    const unConnection=shopify.connectivity.current.subscribe(value=>{if(own())setConnected(value.internetConnected==='Connected');});
+    const unConnection=shopify.connectivity.current.subscribe(value=>{
+      if(!own())return;
+      const online=value.internetConnected==='Connected';setConnected(online);
+      // Counting continued offline on this terminal's lease. Confirm it with OMS
+      // as soon as the connection returns so sync can resume.
+      const claim=ownership.current;
+      if(online&&claim?.value?.owned&&!claim.confirmed&&engine.current?.count?.editable)
+        claim.claim().then(lease=>{if(own())setLeaseProblem(lease.owned?'':'This session is locked on another terminal. Tap the lock badge for details.');}).catch(failure=>{if(own())setLeaseProblem(message(failure));});
+    });
     const unScans=subscribeScans(shopify.scanner,scan=>{
       if(!gate.current||!hasScanLock()||latest.current.hidMode)return;
       if(scan.source==='camera'){
@@ -250,12 +296,13 @@ export function CountWorkspace({owner,setHeader}) {
         state:!current.connected?'offline':current.stats?.pending?'attention':current.stats?.dirty?'pending':current.count.editable?'counting':'submitted'}).catch(()=>{});
     },5000);
     return()=>{
-      stopped=true;alive.current=false;gate.current=false;clearInterval(syncTimer);clearInterval(heartbeat);clearInterval(status);
+      alive.current=false;gate.current=false;clearInterval(syncTimer);clearInterval(heartbeat);clearInterval(status);
       unSources();unConnection();unScans();shopify.scanner.hideCameraScanner();
       const state=engine.current;if(state)state.active=false;
       if(ownership.current)ownership.current.active=false;
       // Keep background uploads out until an in-flight foreground save finishes.
-      Promise.allSettled([state?.syncing,state?.aggregating,state?.tail]).then(()=>releaseForeground?.()).catch(()=>{});
+      cancelOpen.current?.();
+      Promise.allSettled([state?.syncing,state?.aggregating,state?.tail,pruning.current]).then(()=>foreground.current).then(close=>close?.()).catch(()=>{});
     };
   },[]);
   const isSessionDetail=['count','submitted','readonly'].includes(route);
@@ -267,22 +314,20 @@ export function CountWorkspace({owner,setHeader}) {
   const posScannerConnected=sources.includes('external')||sources.includes('embedded');
   const pending=(stats?.dirty||0)+(stats?.pending||0);
   const syncText=!count?.editable?'Saved in HotWax':saving?'Syncing with HotWax…':stats?.pending?`${stats.pending} scans to check · other products can still be counted`:stats?.dirty?`${stats.dirty} products saved on this device · sync pending`:lastSynced?'All quantities synced with HotWax':'Scans are saved on this device, then synced automatically';
+  const backTarget=ROUTES[route]?.back;
   function back() {
-    if(route==='opening'){go(opening?.from||'home');return;}
-    if(['count','submitted','readonly','context'].includes(route)){leave(true);return;}
-    if(route==='product'){go(sessionRoute);return;}
-    if(route==='issue'){showUnmatchedScans();return;}
-    if(route==='match'){go('issue');return;}
-    if(['editSession','discard','forceRelease','camera'].includes(route)){go('options');return;}
-    if(route==='diagnostics'||route==='saved'||route==='remove'){go('options');return;}
-    go(count?sessionRoute:'home');
+    if(backTarget==='from'){cancelOpen.current?.();cancelOpen.current=null;go(opening?.from||'home');return;}
+    if(backTarget==='summary'){leave(true);return;}
+    if(backTarget==='unmatched'){showUnmatchedScans();return;}
+    if(backTarget==='session'){go(sessionRoute);return;}
+    go(backTarget||(count?sessionRoute:'home'));
   }
   if(route==='new')return <CreateCount request={request} storage={storage} owner={owner} timeZone={history?.timeZone} back={()=>go('home')} onCreated={result=>{setWorkId(result.workEffortId);go('work');}}/>;
   if(route==='work')return <CountFlow key={workId} workEffortId={workId} setHeader={setHeader} openSession={open} storage={storage} owner={owner} request={request} back={()=>{setWorkId(null);go('home');run(()=>refresh());}}/>;
   return <>
     <s-button slot="secondary-actions" loading={busy} disabled={busy||route==='opening'} onClick={()=>go(route==='options'?(count?sessionRoute:'home'):'options')}>{route==='options'?'Done':'More'}</s-button>
     <s-scroll-box key={`${route}:${count?.sessionId||'home'}:${route==='product'?productId:''}`}><s-box padding="large"><s-stack direction="block" gap="large">
-      {!['home','probe','options','hand'].includes(route)&&<BackButton disabled={busy} onClick={back}>{['count','submitted','readonly','context'].includes(route)?'Count summary':route==='product'?'Session details':'Back'}</BackButton>}
+      {!['home','options','hand'].includes(route)&&<BackButton disabled={busy&&backTarget!=='from'} onClick={back}>{BACK_LABELS[backTarget]||'Back'}</BackButton>}
       {count&&(isSessionDetail||route==='context')?<s-stack direction="inline" justifyContent="space-between" alignItems="start" gap="large">
         <s-stack direction="block" gap="small">
           <s-heading>{count.countName||'Cycle count'}</s-heading>
@@ -293,9 +338,9 @@ export function CountWorkspace({owner,setHeader}) {
           <s-badge tone={posScannerConnected?'success':'neutral'}>{posScannerConnected?'POS scanner connected':'POS scanner not connected'}</s-badge>
           {showLockDetails&&<s-stack direction="block" gap="small"><s-text color="subdued">POS terminal ID: {lease?.deviceId||currentAuditContext().deviceId}</s-text><s-text color="subdued">Count ID: {count.workEffortId}</s-text><s-text color="subdued">Session ID: {count.sessionId}</s-text>{lease?.operator&&<s-text color="subdued">{lease.operator}</s-text>}</s-stack>}
         </s-stack>
-      </s-stack>:route!=='hand'&&<s-heading>{titles[route]||'Cycle Count'}</s-heading>}
+      </s-stack>:route!=='hand'&&<s-heading>{title}</s-heading>}
       {error&&<s-banner tone="critical" heading={error}/>}
-      {!connected&&<s-banner tone="warning" heading="Offline">Saved sessions and known products are available. Sync resumes after reconnecting.</s-banner>}
+      {!connected&&<s-banner tone="warning" heading="Offline">{canCount?'Keep counting. Scans are saved on this terminal and match and sync after reconnecting.':'Saved sessions are available. Sessions this terminal already holds can keep counting; sync resumes after reconnecting.'}</s-banner>}
       {outage&&<s-banner tone="warning" heading="Development test: HotWax unavailable"/>}
       {route==='opening'&&<s-section heading={opening?.name||'Session'}><s-stack direction="block" gap="base">
         <s-text>{busy?'Opening session…':'The session could not be opened.'}</s-text>
@@ -315,7 +360,7 @@ export function CountWorkspace({owner,setHeader}) {
       </>}
       {count&&['count','context'].includes(route)&&<s-stack direction="block" gap="large">
         {count.countType==='DYNAMIC_COUNT'&&<s-text color="subdued">Dynamic count · Count all units of each product across the store, including back stock. Your team’s sessions are added together.</s-text>}
-        {(!leaseActive||lockUnverified||!lease?.owned)&&count.editable&&<s-section heading={leaseActive&&!lease.owned?'Session in use':'Check device ownership'}><s-stack direction="block" gap="base"><s-text>{leaseProblem||(!connected||outage?'Reconnect to confirm this terminal’s lock.':leaseActive&&!lease.owned?'This session is locked on another terminal. Tap the lock badge for details.':'No active lock is confirmed. Recheck ownership to continue.')}</s-text><s-button disabled={busy||!connected} onClick={reclaim}>Recheck ownership</s-button></s-stack></s-section>}
+        {!canCount&&count.editable&&<s-section heading={leaseActive&&!lease.owned?'Session in use':'Check device ownership'}><s-stack direction="block" gap="base"><s-text>{leaseProblem||(!connected||outage?'Reconnect to confirm this terminal’s lock.':leaseActive&&!lease.owned?'This session is locked on another terminal. Tap the lock badge for details.':'No active lock is confirmed. Recheck ownership to continue.')}</s-text><s-button disabled={busy||!connected} onClick={reclaim}>Recheck ownership</s-button></s-stack></s-section>}
         {route==='context'&&selected?<s-section heading={selected.title}><s-stack direction="block" gap="base"><s-text>{selected.sku} · {selected.quantity??0} counted here</s-text><s-button variant="primary" disabled={busy||!canCount} onClick={async()=>{if(await enqueue({code:selected.sku||selected.productId,productId:selected.productId,source:'product-context'})){context.current=null;setContextProduct(null);go('count');}}}>Count one unit</s-button><s-button disabled={busy||!canCount} onClick={()=>go('product')}>Enter a total quantity</s-button></s-stack></s-section>:<>
           <ScanFeedback last={last} hidMode={hidMode}/>
           <s-stack direction="inline" gap="base">
@@ -364,7 +409,7 @@ export function CountWorkspace({owner,setHeader}) {
           {count.editable&&sources.includes('camera')&&<ActionRow title="Camera counting" detail={cameraMode==='rapid'?'Rapid scanning':'Confirm quantity after scanning'} onClick={()=>go('camera')}/>}
           <s-text color="subdued">{syncText}</s-text>{syncError&&<s-banner tone="warning" heading={syncError}/>}
           {count.editable&&<><ActionRow title="Retry sync" detail={`${pending} pending changes`} disabled={busy||saving} onClick={sync}/><ActionRow title="Compare with HotWax" detail="Resolve a quantity changed on another device" disabled={busy||saving} onClick={compare}/><ActionRow title="Save and release this session" detail="Let another register resume it" disabled={busy||saving||!canCount} onClick={()=>run(async()=>{await engine.current.prepareSubmission();await ownership.current.release();await settle();setCount(null);engine.current=null;go('home');await refresh();})}/></>}
-          {!count.editable&&count.statusId==='SESSION_SUBMITTED'&&<ActionRow title="Remove local copy" detail="Only after HotWax confirms the submitted quantities" onClick={()=>go('remove')}/>}
+          {!count.editable&&<ActionRow title="Remove local copy" detail="Only after HotWax has finished with this session" onClick={()=>go('remove')}/>}
           <ActionRow title="All store counts" onClick={()=>leave(false)}/>
           <s-text color="subdued">{shopify.device.name} · {shopify.device.registerName}</s-text>
           {count.editable&&<s-stack direction="block" gap="small"><s-stack direction="inline"><s-badge tone={lockTone}>{lockLabel}</s-badge></s-stack>{lease?.deviceId&&<s-text>Lock terminal: {lease.deviceId}{lease.operator?` · ${lease.operator}`:''}</s-text>}{lease?.lastHeartbeatAt&&<s-text color="subdued">Last heartbeat: {new Date(lease.lastHeartbeatAt).toLocaleTimeString()}</s-text>}</s-stack>}
@@ -373,8 +418,7 @@ export function CountWorkspace({owner,setHeader}) {
       </>}
       {route==='saved'&&<>{catalog.slice(localPage*20,(localPage+1)*20).map(item=><ActionRow key={item.sessionId} title={item.name||item.sessionId} meta={editable(item.statusId)?'Resume':'View'} disabled={busy} onClick={()=>open(item.sessionId)}/>)}{!catalog.length&&<s-text>No saved sessions for this operator at this store.</s-text>}<CompactPager page={localPage} pages={Math.max(1,Math.ceil(catalog.length/20))} total={catalog.length} label="sessions" onPage={setLocalPage}/></>}
       {route==='remove'&&<><s-text>This removes this session’s scan history from this register. Submitted quantities stay in HotWax.</s-text><s-button variant="primary" disabled={busy} onClick={removeLocal}>Remove verified local copy</s-button></>}
-      {LOCAL_OMS_PREVIEW&&route==='diagnostics'&&<><s-text>{stats?`${stats.events} saved events · ${stats.pending} unmatched · ${stats.dirty} products to sync`:'No session open'}</s-text><s-button disabled={busy} onClick={()=>go('probe')}>Check 5,000-product list</s-button><s-button disabled={busy} onClick={()=>run(async()=>setProbe(await probePagedStorage(shopify.storage,owner,setProbe)))}>Check 50,000-scan storage</s-button><s-button disabled={busy} onClick={()=>run(async()=>{await simulateOmsOutage(!outage);setOutage(!outage);})}>{outage?'Restore HotWax connection':'Simulate HotWax outage'}</s-button>{probe&&<s-text>{probe}</s-text>}</>}
-      {LOCAL_OMS_PREVIEW&&route==='probe'&&<ListProbe close={()=>go('diagnostics')}/>}
+      {LOCAL_OMS_PREVIEW&&route==='diagnostics'&&<><s-text>{stats?`${stats.events} saved events · ${stats.pending} unmatched · ${stats.dirty} products to sync`:'No session open'}</s-text><s-button disabled={busy} onClick={()=>run(async()=>{await simulateOmsOutage(!outage);setOutage(!outage);})}>{outage?'Restore HotWax connection':'Simulate HotWax outage'}</s-button></>}
       {count&&isSessionDetail&&<s-tabs value={sessionTab} onChange={e=>selectSessionTab(e.currentTarget.value)}>
         <s-tab-list>{sessionTabs.map(([id,label])=><s-tab key={id} controls={id}>{label}</s-tab>)}</s-tab-list>
         {sessionTabs.map(([id])=><s-tab-panel key={id} id={id}>
@@ -392,7 +436,7 @@ export function CountWorkspace({owner,setHeader}) {
             {scanHistory?.items.map(event=><ScanEventRow key={event.id} event={event} disabled={busy||!canCount} onMatch={event=>{setIssueId(event.id);go('issue');}} onUndo={event=>run(async()=>{if(event.aggApplied===0)await engine.current.discardUnmatched(event.id);else await engine.current.undoScan(event.id);})}/>)}
             {!scanHistory?.total&&<s-text>No scan events match this view.</s-text>}
             {scanHistory&&<CompactPager {...scanHistory} label="events" disabled={busy} onPage={setScanPage}/>}
-          </s-stack>:<ProductList key={id} items={count.items} disabled={busy} memory={listMemory.current} activeView={id} showTabs={false} countExtras onSelect={selectProduct}/>)}
+          </s-stack>:<ProductList key={id} items={count.items} listIndex={services.current.listIndex} disabled={busy} memory={listMemory.current} activeView={id} showTabs={false} countExtras onSelect={selectProduct}/>)}
         </s-tab-panel>)}
       </s-tabs>}
     </s-stack></s-box></s-scroll-box>

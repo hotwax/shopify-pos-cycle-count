@@ -20,10 +20,6 @@ import {
 } from "./count-policy";
 
 export const BASE = "/rest/s1/inventory-cycle-count/cycleCounts";
-const STATUS_GROUPS = [
-  "CYCLE_CNT_CREATED,CYCLE_CNT_IN_PRGS,CYCLE_CNT_CMPLTD",
-  "CYCLE_CNT_CLOSED,CYCLE_CNT_CNCL",
-];
 export const EDITABLE = new Set(["SESSION_CREATED", "SESSION_ASSIGNED"]);
 export type CountIdentity = {
   shop: string;
@@ -39,7 +35,7 @@ export const number = (value: unknown) =>
     ? Number(value)
     : null;
 
-async function context(identity: CountIdentity, oms: OmsConnection) {
+function assertSignedInOperator(identity: CountIdentity) {
   // Shopify authenticates the logged-in account, not a different PIN-only staff member.
   // Never borrow that account's inventory visibility for another pinned operator.
   if (
@@ -51,6 +47,10 @@ async function context(identity: CountIdentity, oms: OmsConnection) {
       403,
     );
   }
+}
+
+async function context(identity: CountIdentity, oms: OmsConnection) {
+  assertSignedInOperator(identity);
   const [{ shop, facilityId }, profile, permissionResult] = await Promise.all([
     shopFacility(
       oms,
@@ -74,9 +74,16 @@ async function context(identity: CountIdentity, oms: OmsConnection) {
     throw new OmsLookupError(
       "OMS could not establish your count identity and store.",
     );
-  const facility = await oms.get(
-    `/rest/s1/admin/facilities/${encodeURIComponent(facilityId)}`,
-  );
+  // The shop's product store is usually the facility's, so load its preferences
+  // alongside the facility instead of after it.
+  const storeHint = text(shop.productStoreId);
+  const [facility, hinted] = await Promise.all([
+    oms.get(`/rest/s1/admin/facilities/${encodeURIComponent(facilityId)}`),
+    storeHint ? countingPreferences(storeHint, oms).catch((error: unknown) => error) : undefined,
+  ]);
+  const store = text(facility.productStoreId || shop.productStoreId);
+  const preferences = store === storeHint && hinted && !(hinted instanceof Error) ? hinted as Awaited<ReturnType<typeof countingPreferences>> :
+    await countingPreferences(store, oms);
   return {
     shopId: text(shop.shopId),
     facilityId,
@@ -91,29 +98,23 @@ async function context(identity: CountIdentity, oms: OmsConnection) {
     canPrestart: capabilities.canPrestart,
     canPreview: capabilities.canPreview,
     canRelease: capabilities.canRelease,
-    preferences: await countingPreferences(text(facility.productStoreId || shop.productStoreId),oms),
+    preferences,
   };
 }
 export type Context = Awaited<ReturnType<typeof context>>;
 
-async function countLists(
-  ctx: Context,
-  oms: OmsConnection,
-  query: Record<string, string>,
-) {
-  // The OMS service applies completion-date filtering whenever a closed status
-  // is present. Mixing it with open statuses therefore excludes unfinished counts.
-  return Promise.all(
-    STATUS_GROUPS.map((statusId) =>
-      oms.get(
-        `${BASE}/workEfforts?${new URLSearchParams({
-          facilityId: ctx.facilityId,
-          statusId,
-          ...query,
-        })}`,
-      ),
-    ),
-  );
+/** Per-runtime context reuse. The caller drops entries when OMS rejects access. */
+export type ContextCache = {key: string; entries: Map<string, {ctx: Context; until: number}>};
+const CONTEXT_TTL = 2 * 60000;
+async function countContext(identity: CountIdentity, oms: OmsConnection, cache?: ContextCache) {
+  // The operator check is local and runs on every action, including cached ones.
+  assertSignedInOperator(identity);
+  const key = cache && `${cache.key}|${text(identity.shopifyStaffMemberId)}`;
+  const hit = key ? cache!.entries.get(key) : undefined;
+  if (hit && hit.until > Date.now()) return hit.ctx;
+  const ctx = await context(identity, oms);
+  if (key) cache!.entries.set(key, {ctx, until: Date.now() + CONTEXT_TTL});
+  return ctx;
 }
 
 export function validId(id: string) {
@@ -149,21 +150,22 @@ export async function sessionRows(id: string, oms: OmsConnection, productIds?: s
 }
 export async function productDetails(ids: string[], ctx: Context, oms: OmsConnection) {
   const details = new Map<string, OmsRow>(), balances = new Map<string, OmsRow>();
-  for (let offset = 0; offset < ids.length; offset += 800) {
-    await Promise.all(Array.from({length: Math.min(4, Math.ceil((ids.length - offset) / 200))}, async (_, index) => {
-      const query = {productId: ids.slice(offset + index * 200, offset + (index + 1) * 200).join(","), productId_op: "in", pageSize: "201"};
-      const [products, inventory, labels] = await Promise.all([
-        oms.get(`/rest/s1/oms/products?${new URLSearchParams(query)}`),
-        ctx.canViewOnHand ? oms.get(`/rest/s1/oms/productFacilities/inventory?${new URLSearchParams({...query, facilityId: ctx.facilityId})}`) : Promise.resolve([]),
-        productSearchDetails(ids.slice(offset + index * 200, offset + (index + 1) * 200),ctx.preferences,oms),
-      ]);
-      for (const product of rows(products)) details.set(text(product.productId), {...product,presentation:labels.get(text(product.productId))});
-      for (const item of rows(inventory)) {
-        if (balances.has(text(item.productId))) throw new OmsLookupError("OMS inventory balance is ambiguous.");
-        balances.set(text(item.productId), item);
-      }
-    }));
-  }
+  // Queue every 200-product chunk at once. OmsConnection keeps at most six
+  // requests in flight, so slow chunks no longer hold back the next window.
+  await Promise.all(Array.from({length: Math.ceil(ids.length / 200)}, async (_, index) => {
+    const chunk = ids.slice(index * 200, (index + 1) * 200);
+    const query = {productId: chunk.join(","), productId_op: "in", pageSize: "201"};
+    const [products, inventory, labels] = await Promise.all([
+      oms.get(`/rest/s1/oms/products?${new URLSearchParams(query)}`),
+      ctx.canViewOnHand ? oms.get(`/rest/s1/oms/productFacilities/inventory?${new URLSearchParams({...query, facilityId: ctx.facilityId})}`) : Promise.resolve([]),
+      productSearchDetails(chunk,ctx.preferences,oms),
+    ]);
+    for (const product of rows(products)) details.set(text(product.productId), {...product,presentation:labels.get(text(product.productId))});
+    for (const item of rows(inventory)) {
+      if (balances.has(text(item.productId))) throw new OmsLookupError("OMS inventory balance is ambiguous.");
+      balances.set(text(item.productId), item);
+    }
+  }));
   return {details, balances};
 }
 
@@ -246,15 +248,16 @@ export async function handleCount(
   identity: CountIdentity,
   payload: OmsRow,
   oms: OmsConnection,
+  cache?: ContextCache,
 ) {
-  const ctx = await context(identity, oms);
+  const ctx = await countContext(identity, oms, cache);
   const action = text(payload.action);
   const sessionId = text(payload.sessionId);
-  if (['leaseStatus','leaseClaim','leaseRenew','leaseRelease','leaseForceRelease'].includes(action)) {
-    const {session,work} = await ownedCount(sessionId,ctx,oms,action !== 'leaseStatus');
-    if (action !== 'leaseStatus' && action !== 'leaseRelease' && action !== 'leaseForceRelease' && (!EDITABLE.has(text(session.statusId)) || text(work.statusId)!=='CYCLE_CNT_IN_PRGS'))
+  if (['leaseClaim','leaseRenew','leaseRelease','leaseForceRelease'].includes(action)) {
+    const {session,work} = await ownedCount(sessionId,ctx,oms,true);
+    if (action !== 'leaseRelease' && action !== 'leaseForceRelease' && (!EDITABLE.has(text(session.statusId)) || text(work.statusId)!=='CYCLE_CNT_IN_PRGS'))
       throw new OmsLookupError('This session is no longer open for counting.',409);
-    if (action !== 'leaseStatus') requireCountConnection(identity.shop);
+    requireCountConnection(identity.shop);
     if(action==='leaseForceRelease'){
       const lock=await sessionLease(sessionId,oms);
       if(!lock)return {released:true};
@@ -280,59 +283,29 @@ export async function handleCount(
       ...(ctx.canViewOnHand?{onHand:number(balances.get(productId)?.quantityOnHand)}:{})};
   }
   if(action==='catalog'){const result=await catalogPage(payload,ctx.preferences,oms);return {...result,items:await withInventory(result.items,ctx,oms)};}
-  if(action==='product'){const productId=text(payload.productId);validId(productId);const product=(await countableProducts([productId],ctx.preferences,oms)).get(productId)!;return (await withInventory([product],ctx,oms))[0];}
   const creation=await handleCountCreation(identity,payload,ctx,oms);
   if(creation!==undefined)return creation;
   const workflow = await handleWorkflow(identity, payload, ctx, oms);
   if (workflow !== undefined) return workflow;
-  if (action === "history") {
-    const pageIndex = Number(payload.pageIndex ?? 0);
-    if (!Number.isSafeInteger(pageIndex) || pageIndex < 0 || pageIndex > 10000)
-      throw new OmsLookupError("Invalid history page.", 400);
-    const results = await countLists(ctx, oms, {
-      pageSize: "20",
-      pageIndex: String(pageIndex),
-      orderByField: "-createdDate",
-    });
-    const counts = results
-      .flatMap((result) => rows(result.cycleCounts))
-      .filter((w) => text(w.createdByUserLogin) === ctx.username)
-      .flatMap((work) =>
-        rows(work.sessions)
-          .filter(
-            (s) =>
-              text(s.uploadedByUserLogin) === ctx.username &&
-              /^POSI_[a-f0-9]{15}$/.test(text(s.inventoryCountImportId)),
-          )
-          .map((s) => ({
-            sessionId: text(s.inventoryCountImportId),
-            workEffortId: text(work.workEffortId),
-            name: text(work.workEffortName),
-            statusId: text(s.statusId),
-            countStatusId: text(work.statusId),
-            createdDate: s.createdDate,
-          })),
-      )
-      .sort((a, b) => Number(b.createdDate) - Number(a.createdDate));
-    return {
-      facilityName: ctx.facilityName,
-      userName: ctx.userName,
-      canCreate: ctx.canCreate,
-      canSubmit: ctx.canSubmit,
-      canViewOnHand: ctx.canViewOnHand,
-      counts,
-      nextPage: results.some(
-        (result) => (pageIndex + 1) * 20 < Number(result.cycleCountsCount),
-      )
-        ? pageIndex + 1
-        : null,
-    };
-  }
   if (action === "detail")
     return {
       ...(await countDetail(sessionId, ctx, oms)),
       canViewOnHand: ctx.canViewOnHand,
     };
+  if (action === "localCopyStatus") {
+    // A small status read lets POS prune finished local copies without loading
+    // product details. Submitted quantities are returned for verification.
+    const {session, work} = await ownedCount(sessionId, ctx, oms);
+    const statusId = text(session.statusId), countStatusId = text(work.statusId);
+    const editable = EDITABLE.has(statusId) && countStatusId === "CYCLE_CNT_IN_PRGS";
+    const quantities: Record<string, number> = {};
+    if (!editable && ["SESSION_SUBMITTED", "SESSION_APPROVED"].includes(statusId))
+      for (const row of await sessionRows(sessionId, oms)) {
+        const productId = text(row.productId), quantity = number(row.quantity);
+        if (productId && quantity !== null) quantities[productId] = (quantities[productId] ?? 0) + quantity;
+      }
+    return {sessionId, statusId, countStatusId, editable, quantities};
+  }
   if (action === "lookup" || action === "lookupBatch" || action === "lookupIdentityBatch") {
     const codes = action === "lookup" ? [text(payload.code).trim()] : Array.isArray(payload.codes) ? payload.codes.map(value => text(value).trim()) : [];
     const result = await matchCodes([...new Set(codes)], ctx.preferences, oms, action === "lookupIdentityBatch");
@@ -348,63 +321,6 @@ export async function handleCount(
       "Your OMS account cannot submit a cycle count for review.",
       403,
     );
-  if (action === "start") {
-    if (!ctx.canCreate)
-      throw new OmsLookupError("Your OMS account cannot create a count.", 403);
-    const operationId = text(payload.operationId);
-    if (!/^[a-f0-9]{15}$/.test(operationId))
-      throw new OmsLookupError("Invalid count creation ID.", 400);
-    const workEffortId = `POSC_${operationId}`,
-      id = `POSI_${operationId}`;
-    const existing = await countLists(ctx, oms, {
-      keyword: workEffortId,
-      pageSize: "2",
-    });
-    if (
-      !existing
-        .flatMap((result) => rows(result.cycleCounts))
-        .some((w) => text(w.workEffortId) === workEffortId)
-    ) {
-      const now = Date.now();
-      await oms.mutate(`${BASE}/workEfforts`, {
-        workEffortId,
-        workEffortName:
-          text(payload.name).trim().slice(0, 100) ||
-          `POS count ${new Date(now).toISOString().slice(0, 16)}`,
-        workEffortTypeId: "CYCLE_COUNT_RUN",
-        workEffortPurposeTypeId: "HARD_COUNT",
-        statusId: "CYCLE_CNT_IN_PRGS",
-        facilityId: ctx.facilityId,
-        createdByUserLogin: ctx.username,
-        createdDate: now,
-        estimatedStartDate: now,
-        actualStartDate: now,
-        estimatedCompletionDate: now + 86400000,
-      });
-    }
-    const work = await oms.get(`${BASE}/workEfforts/${workEffortId}`);
-    if (
-      text(work.createdByUserLogin) !== ctx.username ||
-      text(work.facilityId) !== ctx.facilityId ||
-      text(work.workEffortPurposeTypeId) !== "HARD_COUNT" ||
-      text(work.workEffortTypeId) !== "CYCLE_COUNT_RUN"
-    )
-      throw new OmsLookupError("Count creation identity conflict.", 403);
-    const sessions = rows(
-      await oms.get(`${BASE}/workEfforts/${workEffortId}/sessions?pageSize=2`),
-    );
-    if (!sessions.some((s) => text(s.inventoryCountImportId) === id))
-      await oms.mutate(`${BASE}/workEfforts/${workEffortId}/sessions`, {
-        inventoryCountImportId: id,
-        countImportName: text(work.workEffortName),
-        statusId: "SESSION_ASSIGNED",
-        uploadedByUserLogin: ctx.username,
-        createdDate: Date.now(),
-        facilityAreaId: "register",
-        workEffortId,
-      });
-    return countDetail(id, ctx, oms);
-  }
   if(action==='reopenSession'){
     const {session,work}=await ownedCount(sessionId,ctx,oms,true);
     if(!['SESSION_SUBMITTED','SESSION_CREATED','SESSION_ASSIGNED'].includes(text(session.statusId)))throw new OmsLookupError('This session cannot be reopened.',409);
@@ -450,17 +366,22 @@ export async function handleCount(
       if (!EDITABLE.has(text(latest.session.statusId)) || text(latest.work.statusId) !== "CYCLE_CNT_IN_PRGS")
         throw new OmsLookupError("Count changed before saving.", 409);
       const countPath = `${BASE}/workEfforts/${encodeURIComponent(text(latest.work.workEffortId))}/count?${new URLSearchParams({pageSize: "26", inventoryCountImportId: sessionId, productId: productIds, productId_op: "in"})}`;
-      const counted = rows(await oms.get(countPath));
+      // These reads are independent; validate them in the original order after one round trip.
+      const [countedRows, balanceRows, existingRows] = await Promise.all([
+        oms.get(countPath),
+        oms.get(`/rest/s1/oms/productFacilities/inventory?${new URLSearchParams({facilityId: ctx.facilityId, productId: productIds, productId_op: "in", pageSize: "100"})}`),
+        sessionRows(sessionId, oms, productIds),
+      ]);
+      const counted = rows(countedRows);
       for (const item of batch) {
         const existing = number(counted.find(row => text(row.productId) === item.productId)?.counted);
         if (existing !== item.expectedQuantity && existing !== item.quantity)
           throw new OmsLookupError("This product was changed in HotWax or on another device. Your scans are safe; refresh and reconcile the quantity before syncing.", 409);
       }
-      const balances = rows(await oms.get(`/rest/s1/oms/productFacilities/inventory?${new URLSearchParams({facilityId: ctx.facilityId, productId: productIds, productId_op: "in", pageSize: "100"})}`));
+      const balances = rows(balanceRows);
       if (batch.some(item => balances.filter(row => text(row.productId) === item.productId).length > 1))
         throw new OmsLookupError("OMS returned ambiguous inventory balances.");
       const onHand = (id: string) => number(balances.find(row => text(row.productId) === id)?.quantityOnHand);
-      const existingRows = await sessionRows(sessionId, oms, productIds);
       const updates = batch.flatMap(item => {
         const existing = existingRows.filter(row => text(row.productId) === item.productId);
         if (existing.some(row => !row.uuid) || new Set(existing.map(row => row.uuid)).size !== existing.length)

@@ -24,14 +24,23 @@ export function createScanProductLookup(api: ProductSearchApiContent | undefined
       const result = await api.searchProducts({queryString:key,first:50});
       // A fuzzy result or incomplete page is never evidence of a unique variant.
       if (!isCurrent() || result.hasNextPage) return null;
-      const matches = new Map<number,ScanDisplay>();
-      for (const product of result.items || []) {
-        const variants = product.variants || await api.fetchProductVariantsWithProductId(product.id);
+      const matches = new Map<number,ScanDisplay>(), products = result.items || [];
+      const collect = (product: typeof products[number], variants: NonNullable<typeof products[number]['variants']>) => {
         for (const variant of variants) if (variant.barcode === key) {
           matches.set(variant.id, {shopifyProductId:product.id,shopifyVariantId:variant.id,
             title:[product.title,variant.title !== 'Default Title' ? variant.title : ''].filter(Boolean).join(' · '),
             sku:variant.sku || '',imageUrl:variant.image || product.featuredImage || ''});
         }
+      };
+      for (const product of products) if (product.variants) collect(product, product.variants);
+      // Fetch the remaining variant lists together (four at a time) instead of one
+      // after another; a second exact match already makes the barcode ambiguous.
+      const missing = products.filter(product => !product.variants);
+      for (let i = 0; i < missing.length && matches.size < 2; i += 4) {
+        const batch = missing.slice(i, i + 4);
+        const lists = await Promise.all(batch.map(product => api.fetchProductVariantsWithProductId(product.id)));
+        if (!isCurrent()) return null;
+        batch.forEach((product, index) => collect(product, lists[index]));
       }
       return matches.size === 1 ? [...matches.values()][0] : null;
     };

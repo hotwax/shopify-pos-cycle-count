@@ -66,3 +66,27 @@ test('interrupted scoped cleanup finishes on reopen and keeps other staff data',
  assert.equal(await new CountStorage(f.native).get(key),undefined);
  assert.deepEqual([...f.data.entries()],[['unrelated-staff','preserve']]);
 });
+
+test('item pages grow with the document instead of always using sixteen storage entries',async()=>{
+ const f=fixture(),storage=new CountStorage(f.native),itemKey='hotwax-count:owner:count-items';
+ const items=(n:number)=>({version:2,sessionId:'test',items:Object.fromEntries(Array.from({length:n},(_,i)=>[`p${i}`,{productId:`p${i}`,quantity:i}]))});
+ await storage.writeDocument(itemKey,items(5));
+ assert.equal(Object.keys(JSON.parse(f.data.get(itemKey)).pages).length,1);assert.equal(f.data.size,2);
+ await storage.writeDocument(itemKey,items(1000));const grown=JSON.parse(f.data.get(itemKey));
+ assert.equal(grown.buckets,4);assert.equal(Object.keys(grown.pages).length,4);assert.equal(f.data.size,5);
+ assert.deepEqual(await new CountStorage(f.native).get(itemKey),items(1000));
+ // A manifest written before sized buckets keeps its sixteen-page layout instead of repaging.
+ const legacy=JSON.parse(f.data.get(itemKey));delete legacy.buckets;f.data.set(itemKey,JSON.stringify(legacy));
+ const reopened=new CountStorage(f.native);await reopened.get(itemKey);await reopened.writeDocument(itemKey,items(1001));
+ assert.equal(JSON.parse(f.data.get(itemKey)).buckets,16);
+ assert.deepEqual(await new CountStorage(f.native).get(itemKey),items(1001));
+});
+
+test('a clean commit needs no storage reads and leaves no transaction record',async()=>{
+ const data=new Map<string,any>(),reads:string[]=[];
+ const native={get:async(k:string)=>{reads.push(k);return data.get(k);},set:async(k:string,v:any)=>{data.set(k,v);},delete:async(k:string)=>{data.delete(k);}};
+ const storage=new CountStorage(native);await storage.writeDocument(key,doc(1));reads.length=0;
+ await storage.writeDocument(key,doc(2));await storage.writeDocument(key,doc(3));
+ assert.deepEqual(reads,[]);assert.equal(data.has(`${key}:transaction`),false);assert.equal(data.size,2);
+ assert.deepEqual(await new CountStorage(native).get(key),doc(3));
+});

@@ -12,7 +12,9 @@
     "info": "shopify app info",
     "generate": "shopify app generate",
     "deploy": "node scripts/configure-oms.mjs --release && shopify app deploy",
+    "pretest": "node scripts/configure-oms.mjs --release --if-missing",
     "test": "node --import tsx --test tests/*.test.ts",
+    "pretypecheck": "node scripts/configure-oms.mjs --release --if-missing",
     "typecheck": "tsc --noEmit"
   },
   "trustedDependencies": [

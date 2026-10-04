@@ -82,3 +82,14 @@ test('a native miss retains OMS name/image fallback while a native hit uses iden
  assert.equal(f.state.items.items['HW-native'].imageUrl,display.imageUrl);assert.equal(f.state.items.items['HW-fallback'].imageUrl,'oms.jpg');
  assert.equal(f.stats().lastScan.imageUrl,'oms.jpg');assert.equal(f.state.itemUnits,2);
 });
+test('missing variant lists load in parallel and stop once a barcode is ambiguous',async()=>{
+ const run=async(matching:number[])=>{
+  let active=0,peak=0,fetched=0;
+  const api={searchProducts:async()=>({hasNextPage:false,items:Array.from({length:8},(_,i)=>({id:i+1,title:`P${i+1}`}))}),
+   fetchProductVariantsWithProductId:async(id:number)=>{fetched++;active++;peak=Math.max(peak,active);await new Promise(r=>setTimeout(r,5));active--;
+    return [{id:id*10,barcode:matching.includes(id)?'00123':'other',title:'Default Title',sku:`sku-${id}`}];}};
+  return {result:await createScanProductLookup(api as any)('00123'),peak,fetched};
+ };
+ const single=await run([7]);assert.equal(single.result?.shopifyProductId,7);assert.equal(single.peak,4);assert.equal(single.fetched,8);
+ const ambiguous=await run([1,2]);assert.equal(ambiguous.result,null);assert.equal(ambiguous.fetched,4);
+});

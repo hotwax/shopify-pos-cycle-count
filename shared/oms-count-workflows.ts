@@ -50,14 +50,24 @@ async function reviewRows(id: string, oms: OmsConnection) {
   }
   throw new OmsLookupError('Count progress could not be fully loaded.');
 }
-async function facilityProducts(ctx: Context, oms: OmsConnection) {
+const FACILITY_PAGE = 500, FACILITY_WINDOW = 4;
+export async function facilityProducts(ctx: Pick<Context,'facilityId'>, oms: OmsConnection) {
   const found = new Map<string, OmsRow>();
-  for (let index = 0; true; index++) {
-    const result = await oms.postRead('/rest/s1/oms/dataDocumentView', {dataDocumentId:'ProductFacilityAndInventoryItem',pageSize:500,pageIndex:index,customParametersMap:{facilityId:ctx.facilityId}});
+  const page = async (index: number) => {
+    const result = await oms.postRead('/rest/s1/oms/dataDocumentView', {dataDocumentId:'ProductFacilityAndInventoryItem',pageSize:FACILITY_PAGE,pageIndex:index,customParametersMap:{facilityId:ctx.facilityId}});
     if (!Array.isArray(result.entityValueList)) throw new OmsLookupError('HotWax did not return the facility product scope. Completion is unavailable.');
-    const list = rows(result.entityValueList);
-    for (const item of list) found.set(text(item.productId), item);
-    if (list.length < 500) return found;
+    return rows(result.entityValueList);
+  };
+  // Read four pages per round trip. The first short page ends the scope; any
+  // later page in the same window is past the end and must be empty.
+  for (let start = 0; start <= 10000; start += FACILITY_WINDOW) {
+    const lists = await Promise.all(Array.from({length: FACILITY_WINDOW}, (_, offset) => page(start + offset)));
+    const last = lists.findIndex(list => list.length < FACILITY_PAGE);
+    for (const list of last < 0 ? lists : lists.slice(0, last + 1)) for (const item of list) found.set(text(item.productId), item);
+    if (last >= 0) {
+      if (lists.slice(last + 1).some(list => list.length)) throw new OmsLookupError('Facility product scope changed while loading. Refresh progress.');
+      return found;
+    }
   }
   throw new OmsLookupError('Facility product scope is incomplete. Completion is unavailable.');
 }

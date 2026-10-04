@@ -50,3 +50,18 @@ test('a lost background receipt acknowledgement retries the same quantity withou
   const reopened=f.engine();await reopened.open({...f.count,items:[{productId:'p',sku:'sku',quantity:1}]});
   assert.equal(reopened.items.items.p.quantity,1);assert.equal(reopened.items.items.p.syncedRevision,1);
 });
+test('an operator with no saved sessions costs one read and no coordination writes',async()=>{
+  const reads=[],writes=[];
+  const native={get:async k=>{reads.push(k);},set:async k=>{writes.push(k);},delete:async k=>{writes.push(k);}};
+  assert.equal(await syncBackground({native,owner:'idle',request:async()=>{throw Error('no request expected');}}),0);
+  assert.deepEqual(reads,['hotwax-count:idle:sessions']);assert.deepEqual(writes,[]);
+});
+test('coordination flags are short heartbeats, so a stopped runtime releases journal work quickly',async()=>{
+  const f=fixture(),close=await enterForeground(f.native,'owner');
+  assert.ok(f.data.get('hotwax-count:foreground').expiresAt-Date.now()<=15000);
+  await close();assert.equal(f.data.has('hotwax-count:foreground'),false);
+  // A busy flag left by a killed background runtime holds journal work only until it expires.
+  f.data.set('hotwax-count:background-busy',{id:'stopped',expiresAt:Date.now()+300});
+  const started=Date.now(),release=await enterForeground(f.native,'owner');
+  assert.ok(Date.now()-started>=250);await release();
+});

@@ -124,3 +124,36 @@ test('uncached barcode bursts use one batch lookup and isolate unmatched product
  for(const code of ['a','a','b','unknown'])await e.append({code,source:'external'});
  await e.aggregate();assert.equal(batches,1);assert.equal(f.lookups(),0);assert.equal(e.items.items.p1.quantity,2);assert.equal(e.items.items.p2.quantity,1);assert.equal(e.events.events[3].aggApplied,0);
 });
+
+test('a scan that would leave the allowed range stays pending alone; the rest of its batch commits', async()=>{
+ const data=new Map();const storage={get:async k=>copy(data.get(k)),set:async(k,v)=>{data.set(k,copy(v));}};
+ const request=async(_action,{code})=>({productId:code==='big'?'p1':'p2',sku:code,title:code});
+ const e=new CountState(storage,'owner',request);await e.open(count);
+ await e.append({code:'big',source:'correction',quantity:1000000});await e.aggregate();
+ const over=await e.append({code:'big',source:'external'});await e.append({code:'ok',source:'external'});
+ await e.aggregate();await e.aggregate();
+ assert.equal(e.items.items.p1.quantity,1000000);assert.equal(e.items.items.p2.quantity,1);
+ assert.deepEqual(e.events.events.filter(x=>x.aggApplied===0).map(x=>x.id),[over]);
+ assert.match(e.failures.get(over).message,/outside 0 to 1,000,000/);
+ await e.discardUnmatched(over);assert.equal(e.events.events.filter(x=>x.aggApplied===0).length,0);
+});
+
+test('POS display data is saved with the aggregation commit, not as an extra journal write', async()=>{
+ const data=new Map(),writes=[];const storage={get:async k=>copy(data.get(k)),set:async(k,v)=>{writes.push(k);data.set(k,copy(v));}};
+ const request=async()=>({productId:'p1',sku:'sku1',title:'Product'});request.enrichScan=async()=>({title:'Shirt',imageUrl:'shirt.jpg'});
+ const e=new CountState(storage,'owner',request);await e.open(count);writes.length=0;
+ await e.append({code:'barcode',source:'external'});await e.aggregate();
+ assert.equal(writes.filter(k=>k===e.eventKey).length,2);
+ assert.equal(decodeDocument(data.get(e.eventKey)).events[0].shopifyProduct.imageUrl,'shirt.jpg');
+ assert.equal(e.items.items.p1.imageUrl,'shirt.jpg');
+});
+
+test('scan history reuses its ordered list across re-renders and page turns', async()=>{
+ const f=fixture(),e=f.engine();await e.open(count);
+ for(let i=0;i<45;i++)await e.append({code:`code-${i}`,source:'external'});
+ const first=e.historyPage('',0),ordered=e.memo.history.list;
+ assert.deepEqual(e.historyPage('',0).items.map(x=>x.id),first.items.map(x=>x.id));
+ assert.equal(e.historyPage('',1).items.length,5);assert.equal(e.memo.history.list,ordered);
+ await e.append({code:'newest',source:'external'});
+ assert.notEqual((e.historyPage('',0),e.memo.history.list),ordered);assert.equal(e.historyPage('',0).items[0].scannedValue,'newest');
+});

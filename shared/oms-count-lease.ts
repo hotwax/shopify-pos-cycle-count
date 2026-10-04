@@ -25,7 +25,6 @@ export function describe(row: OmsRow | undefined, user: string, device: string) 
 export async function manageLease(action: string, id: string, user: string, device: string, supplied: OmsRow | undefined, oms: OmsConnection) {
   leaseDevice(device);
   let current = await sessionLease(id, oms);
-  if (action === 'leaseStatus') return describe(current,user,device);
   if (action === 'leaseClaim') {
     if (current) return describe(current,user,device);
     // The real OMS create service serializes acquisition by locking the session row.

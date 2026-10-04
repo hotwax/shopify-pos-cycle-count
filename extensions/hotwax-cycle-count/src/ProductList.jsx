@@ -11,12 +11,15 @@ export function CompactPager({page,pages,total,onPage,disabled,label='products'}
     <s-button disabled={disabled||page+1>=pages} onClick={()=>onPage(page+1)}>Next</s-button>
   </s-stack>;
 }
-function ProductListContent({items,disabled=false,directed=false,onSelect,selected,initialView='all',filters=true,showTabs=true,activeView,memory,countExtras=false,renderViewActions}) {
+function ProductListContent({items,disabled=false,directed=false,onSelect,selected,initialView='all',filters=true,showTabs=true,activeView,memory,countExtras=false,renderViewActions,listIndex}) {
   const [search,setSearch]=useState(memory?.search||''),[selectedView,setView]=useState(memory?.view||initialView),[page,setPage]=useState(memory?.page||0);
   const view=activeView??(!directed&&selectedView==='undirected'?'all':selectedView);
   const [sort,setSort]=useState(memory?.sort||'assigned');
   const sortId=useId(),sortOptions=[['assigned','Assigned order'],['alphabetic','Alphabetical'],['lastUpdated','Recently updated']];
-  const timer=useRef(0),index=useRef(new CountListIndex());
+  // A caller-owned index survives tab and route remounts, so a large session's
+  // search text is not rebuilt each time the list is shown again.
+  const timer=useRef(0),index=useRef(null);
+  if(!index.current)index.current=listIndex||new CountListIndex();
   useEffect(()=>()=>clearTimeout(timer.current),[]);
   useEffect(()=>{if(memory)Object.assign(memory,{search,view,page,sort});},[search,view,page,sort,memory]);
   const result=useMemo(()=>{index.current.update(items);return index.current.page(search,countExtras&&view==='counted'?'countedAll':view,page,sort);},[items,search,view,page,sort,countExtras]);
