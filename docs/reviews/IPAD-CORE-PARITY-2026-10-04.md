@@ -323,3 +323,43 @@ It does not establish the behavior of a customer-installed candidate or a
 storage-refactor regression. No application changes, release, global data
 clear or inventory adjustment occurred.
 [Business-only evidence](evidence/native-offline-host.json).
+
+## Native 100-entry quota and failed overflow save (TC43)
+
+On candidate `b68d0db` (implementation `2a607b0`), a temporary, guarded
+development-only probe used the real Shopify Storage API and the candidate's
+unchanged CountStorage.save/load. It began with 30 existing keys. A small QA
+document used one key; 69 uniquely prefixed QA filler keys brought storage
+to exactly 100 entries. The next native set rejected with "Storage count
+exceeded". An overwrite of an existing key still succeeded.
+
+At capacity, attempted to save 7,000 QA event-shaped records, forcing the
+actual byte-based overflow path. The native overflow write was rejected;
+CountStorage returned "This POS device has no free count storage. Finish
+and sync its other saved counts before adding more." A fresh CountStorage
+load returned the unchanged previous one-event document. No root committed
+references to a missing overflow value.
+
+The probe's finally block removed only its uniquely prefixed QA keys.
+Native entries returned to 30; every original key remained, all existing
+count-item and scan-event documents had identical fingerprints, and no QA
+keys remained. Restored the exact original Modal source, rebuilt the normal
+preview and restarted POS without reset/reinstall. The named QA Offline
+Control Center session reopened; one further native HID-field Return input
+changed Brown 1 to 2, independently verified by real OMS readback.
+
+Harness observations are excluded from application claims: the preview
+initially failed to reload both temporary and clean bundles until a POS
+process restart. Generic accessibility-row clicks did not open the session;
+a direct tap on its visible name did. ActionRow source is identical to the
+accepted baseline; this is not evidence of a storage-refactor regression.
+No probe remains in application source. This proves one native quota failure
+and failed overflow commit, not naturally lost acknowledgements, every crash
+boundary or a many-session performance benchmark.
+[Business-only evidence](evidence/native-storage-quota.json).
+
+Offline configuration comparison: baseline `cf956cd` and the candidate have
+identical extension TOML, including `runs_offline = true`. CLI 4.8.4's generated
+development manifest and the served preview metadata both enable that feature.
+The observed offline host block in TC28 therefore was not caused by removing
+the setting. Installed-candidate offline behavior remains unverified.
