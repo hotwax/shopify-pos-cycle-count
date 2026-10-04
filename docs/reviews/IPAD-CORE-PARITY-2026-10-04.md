@@ -97,6 +97,18 @@ With the native input already focused and keyboard settled, recorded accessibili
 
 The only accessibility-tree difference in these snapshots was a disabled Submit session button's static-text child being omitted; the button itself retained its bounds. This is not page movement. These are sampled native bounds, not a continuous frame-by-frame video or proof of external-scanner focus/throughput. The keyboard's initial appearance/scroll was allowed to settle before measurement. No diagnostic source code was present for this pass.
 
+## Native legacy migration and retained hand draft
+
+PR head before this pass: `6121bd1042becb1aae6109e3794a31b7e26d246e`; clean implementation remains `82773c5`. Dedicated session **QA Legacy Migration**, `POSI_0a20261004cafe1`, belongs to the natively created dynamic count `POSC_e21baf00518696e`.
+
+A temporary guarded fixture used the exact baseline `cf956cd` page/COW storage writer on the physical extension's native KV store. Real Demo OMS created this QA session, supplied both products and confirmed Brown product `10060` at quantity two before the fixture. Only previously absent keys for this QA session were seeded; the current control store added its session entry without replacing unrelated fields.
+
+The legacy fixture contained four journal events, Brown local quantity three at revision three with an older confirmed receipt for quantity two, a pending Green event with its legacy embedded product identity, one invalid unmatched barcode, and a Brown event already included in the item checkpoint but still marked unapplied in the journal. A legacy hand draft added two Brown units. This models interrupted aggregation and stale receipts with actual baseline-format native values; it is not an installation/upgrade of the complete old app binary.
+
+After removing the temporary seed and restoring the clean candidate, native Resume counting retained Brown at **three** and recovered Green `10061` at **one**. Independent OMS items reads confirmed both. The checkpointed Brown event was not counted twice, the pending Green identity was retained, and the older two-unit receipt did not erase the newer Brown quantity. Hand count reopened the two-unit draft; review showed Already counted **3**, After saving **5**. Native Save recorded one hand-count event; independent OMS readback confirmed Brown **5**, Green **1**. The invalid event stayed unmatched.
+
+A temporary read-only native inspector observed exactly **two current-format `hotwax-count-3` roots**, five journal events, one pending unmatched event, and no rich product objects/title/image/SKU fields in persisted event/item records. Old page roots/pages and receipt keys were gone; the legacy and current saved hand-draft entries were absent after successful save. The inspector was removed and the Modal and generated declarations restored exactly before further recovery. A normal full POS process restart, verified unlock and reattachment to the same preview reopened this clean session with Brown **5**, Green **1**, the same terminal lock and the unmatched event retained. [Business-only migration measurements](evidence/native-legacy-migration.json).
+
 ## Limits / remaining gates
 
 Not yet proven: cancellation through local preparation; physical external/HID and actual camera scans; 2,000+ scope; store-wide near-capacity/interrupted migration; offline reopen and foreground/background upload ownership. Existing automated crash-recovery tests are separate evidence.
