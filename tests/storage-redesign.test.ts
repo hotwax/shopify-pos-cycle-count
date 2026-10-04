@@ -132,6 +132,22 @@ test('product search keeps paging past pages without session products and report
   assert.deepEqual(remembered.sort((a, b) => a - b), [30, 1750]);
 });
 
+test('search never reuses hits from a different equal-sized session', async () => {
+  let calls = 0;
+  const api: any = {searchProducts: async () => {
+    calls++;
+    return {items: [
+      {id: 1, title: 'Shirt', variants: [{id: 10, title: 'Default Title', sku: ''}]},
+      {id: 2, title: 'Shirt', variants: [{id: 20, title: 'Default Title', sku: ''}]},
+    ], hasNextPage: false};
+  }};
+  const search = createMemberSearch(api);
+  const first = await search('shirt', 1, [{productId: 'first', variantId: 10}], () => {});
+  const second = await search('shirt', 1, [{productId: 'second', variantId: 20}], () => {});
+  assert.deepEqual(first!.ids, ['first']); assert.deepEqual(second!.ids, ['second']);
+  assert.equal(second!.complete, true); assert.equal(calls, 2);
+});
+
 test('sparse filtered search resumes past twenty Shopify pages after its time slice', async t => {
   let clock = 0, calls = 0;
   t.mock.method(Date, 'now', () => clock);

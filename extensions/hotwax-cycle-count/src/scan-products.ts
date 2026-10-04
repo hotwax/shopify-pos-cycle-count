@@ -81,16 +81,19 @@ type Member={productId:string;variantId?:number};
  * lose matches just because they occur late in the shop's search results.
  */
 export function createMemberSearch(api: ProductSearchApiContent | undefined) {
-  const cache=new Map<string,{ids:string[];seen:Set<string>;cursor?:string;done:boolean;members:number}>();
-  let generation=0;
+  const cache=new Map<string,{ids:string[];seen:Set<string>;cursor?:string;done:boolean}>();
+  let generation=0,scope='';
   return async (query:string,needed:number,members:Member[],remember:(variantId:number,display:{title:string;sku:string;imageUrl:string})=>void,wanted:(productId:string)=>boolean=()=>true)=>{
     // Any newer call stops this walk; a call spends at most 4 s and the next call resumes.
     const gen=++generation;
     if(!api||!query)return null;
     const deadline=Date.now()+4000;
     const byVariant=new Map(members.filter(member=>member.variantId!=null).map(member=>[Number(member.variantId),member.productId]));
+    // Equal-sized sessions can contain different products; never reuse their hits.
+    const nextScope=JSON.stringify([...byVariant]);
+    if(scope!==nextScope){cache.clear();scope=nextScope;}
     let entry=cache.get(query);
-    if(!entry||entry.members!==byVariant.size)entry={ids:[],seen:new Set(),done:false,members:byVariant.size};
+    if(!entry)entry={ids:[],seen:new Set(),done:false};
     cache.delete(query);cache.set(query,entry);
     while(cache.size>20)cache.delete(cache.keys().next().value!);
     // Count only hits the caller can show (its filter), so a filtered page is never falsely empty.
