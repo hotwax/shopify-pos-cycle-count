@@ -67,7 +67,7 @@ Native Undo then produced **5,067 units and 5,069 journal entries** (the reversa
 
 ## Network interruption limit
 
-Turning off iPad Wi-Fi made the development preview show the POS host's “Error loading extension” before any offline scan could be recorded. Wi-Fi was restored. The live tunnel/manifest were available, and a normal POS process restart plus preview reattachment recovered the clean app and existing recovery-session data. This does not prove a customer-installed offline defect or offline parity: the test involved the development preview/tunnel. No reset, reinstall or data clear was used. Offline scanning and pending background upload remain unfinished gates.
+Turning off iPad Wi-Fi made the development preview show the POS host's “Error loading extension” before any offline scan could be recorded. Wi-Fi was restored. The live tunnel/manifest were available, and a normal POS process restart plus preview reattachment recovered the clean app and existing recovery-session data. This does not prove a customer-installed offline defect or offline parity: the test involved the development preview/tunnel. No reset, reinstall or data clear was used. Offline scanning remains unfinished. The subsequent online POS Home background upload result is recorded below.
 
 ## Native creation, independent optional dates and shared mapping
 
@@ -111,7 +111,7 @@ A temporary read-only native inspector observed exactly **two current-format `ho
 
 ## Limits / remaining gates
 
-Not yet proven: cancellation through local preparation; physical external/HID and actual camera scans; 2,000+ scope; store-wide near-capacity/interrupted migration; offline reopen and foreground/background upload ownership. Existing automated crash-recovery tests are separate evidence.
+Not yet proven: physical external/HID and actual camera scans; 2,000+ scope; store-wide near-capacity/interrupted migration; offline reopen, OS suspension and changed-role upload ownership. Online POS Home background upload and controlled local-preparation cancellation passed in the subsequent checks below. Existing automated crash-recovery tests are separate evidence.
 
 The current Demo facility has 1,723 products and the countable variant query returned 1,770; no fabricated products or global inventory changes were made to inflate scope. A native PIN idle screen requires reinspection/reopen during long observations; it is not an expired signing/profile problem. No POS reset, reinstall, storage clear, customer deployment, merge, final approval or inventory adjustment occurred.
 
@@ -121,7 +121,7 @@ The immediate Back-on-open probe did not establish cancellation: the empty QA se
 
 Native creation fixtures also remain in progress: D0 has separate contributions 10060=1 in its seed session and QA Map B has 10060=2, 10061=1 plus one deliberately unmatched event. DS has its requested 10101=1; HD remains uncounted. No duplicate session was created after an automation navigation failure.
 
-Recovery fixture sessions remain in progress intentionally. This retains a usable QA counting session for further recovery/scan tests. A has `10101=2`; B has `10001=3` and `10101=1`; QA Event Capacity has `10101=5067`. The parent has not been submitted for approval.
+Recovery fixture sessions remain in progress intentionally. At the core-pass observation, A had `10101=2`; B had `10001=3` and `10101=1`; QA Event Capacity had `10101=5067`. The later background pass increased B to `10101=3`, with `10001=3` unchanged. The parent has not been submitted for approval.
 
 Harness observations were checked against fresh native UI: the hand search field is “Find an OMS product”, successful save feedback says “Counted” instead of “Ready to scan”, and HID history uses the scanned barcode rather than SKU. Waiting for the wrong labels caused test timeouts; those were not app regressions. Dismissing the numeric keyboard allowed navigation to an offscreen Back button.
 
@@ -161,3 +161,24 @@ Both temporary diagnostic modifications were restored to the candidate source.
 The shared [QA Google Doc](https://docs.google.com/document/d/1QJxi_u8oLpWTde1GNrLioxo4FN-vYmlPmbO-cSfQ7dE/edit)
 now records 33 cases, including TC33 for this background check and the precise
 TC29 cancellation limitation.
+
+## Controlled native local-preparation cancellation
+
+On head `a4e4558` / implementation `82773c5`, a temporary QA-only wrapper
+delayed delivery of one actual native SDK count-item read for QA Event Capacity
+by eight seconds. It returned the real value unchanged and delegated all
+other native reads/writes and OMS calls. Native opening showed the read stage
+at 3,979 ms; the ordinary Back action completed at 5,333 ms and returned to
+All counts / Start a new session. After a further ten seconds, late
+preparation had not changed the summary route. Reopen retained 5,067 units
+and reacquired this terminal's lock.
+
+After restoring CountWorkspace exactly, the clean candidate reopened with
+5,067 units and 5,069 events (page 1/127). Independent Demo OMS read remained
+5,067. This passes cancellation through local preparation under controlled
+native delivery latency; it is not a natural SDK-stall or unchanged-binary
+timing benchmark. No scan was entered while opening.
+[Business-only result](evidence/native-local-open-cancel.json).
+
+TC29 in the shared QA document now records this controlled pass with its
+method and limitations. The previous natural-timing attempt remains partial.

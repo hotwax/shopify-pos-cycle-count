@@ -1,0 +1,24 @@
+{
+  "started": 1791148093056,
+  "stageObservedMs": 3979,
+  "clickedMs": 5333,
+  "stayedSummary": true,
+  "reopenedQuantity": 5067,
+  "hasTerminalLock": true,
+  "method": "Real native SDK read, one-time 8-second delivery delay for dedicated QA capacity item root",
+  "lateTailWaitMs": 10000,
+  "candidateHead": "a4e455840591debe46b4c862a09f88a9f9c6ae94",
+  "implementationSha": "82773c561bc3e1bfe027f22cf64b80024b7785a3",
+  "sessionId": "POSI_8fea78a9f0fb7f9",
+  "platform": "Physical iPad / Shopify POS 11.16.2 (530647)",
+  "independentOmsQuantity": 5067,
+  "cleanReopenQuantity": 5067,
+  "cleanReopenEvents": 5069,
+  "cleanReopenEventPages": 127,
+  "diagnosticRemoved": true,
+  "limitations": [
+    "Controlled delivery delay after actual native SDK read, not spontaneous SDK stall",
+    "No scan was entered while opening",
+    "No changed API data/results or fake OMS"
+  ]
+}
