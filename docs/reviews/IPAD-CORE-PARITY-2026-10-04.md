@@ -248,3 +248,21 @@ not every case is native and not every remaining gate is passed. A real
 2,000+ catalogue, physical scanner/camera capture, installed offline behavior,
 native quota/interrupted commit and restricted roles remain unfinished.
 No QA count writes or final inventory adjustment were needed in this pass.
+
+## Large-list alphabetical order compared with real OMS scope
+
+On clean head `6f00947`, independently read Brooklyn's complete 1,723-product
+facility scope and all 1,986 OMS product documents. Every facility product
+resolved to its current OMS identifier. Physical QA Native HD
+(`POSC_896521285eec3dd`) changed Assigned order → Alphabetical. Native pages
+1 and 2 each matched their independent expected forty-identifier slices
+exactly. Page 1 ended MH01-M-Black; page 2 began MH01-M-Gray.
+The actual sort code, exercised separately with all real OMS rows, matched
+the complete 1,723-product order across all 44 source pages.
+
+No defect found here: member OMS primary identifiers are retained in memory,
+so this sort does not depend on which Shopify display rows are hydrated.
+Native rendering of all 44 pages and 2,000+ performance remain separate
+unverified gates. No count writes or inventory adjustments occurred.
+[Business-only comparison](evidence/native-large-sort.json); TC41 in the
+shared QA document records native and source coverage separately.
