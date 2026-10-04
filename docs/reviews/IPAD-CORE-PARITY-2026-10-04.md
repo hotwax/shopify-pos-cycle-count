@@ -182,3 +182,44 @@ timing benchmark. No scan was entered while opening.
 
 TC29 in the shared QA document now records this controlled pass with its
 method and limitations. The previous natural-timing attempt remains partial.
+
+## Manual matching, absolute correction, reopen and session metadata
+
+Clean implementation `82773c5`, evidence head `21d9a12`, physical POS 11.16.2
+(530647) and real Demo OMS; no diagnostic source in this pass. In QA Map B
+(`POSI_f5f32bb13849738`, parent `POSC_e21baf00518696e`), native Unmatched →
+Match → product search selected Brown `10060` for the existing invalid event.
+Brown advanced 2 → 3, Green stayed 1, Unmatched became zero and the same four
+events remained. Independent OMS readback confirmed both quantities.
+
+Opening Brown from Counted and saving an absolute total of four produced one
+newest Set total 4 event. Native and OMS retained Brown 4 / Green 1, with five
+events; it did not add four to the old quantity. The existing Unmatched filter
+persisted until All events was selected. This pass did not identify the
+remaining Undo action's product by native row, so source fencing is separate.
+
+Native Submit session saved `SESSION_SUBMITTED` and read-only history. More →
+Reopen session returned `SESSION_ASSIGNED`, restored this terminal's lock and
+counting controls, and retained quantities 4 / 1 and the same five events.
+The parent remained `CYCLE_CNT_IN_PRGS`. Native Edit session saved
+QA Map B Edited / display, then saved QA Map B / register again. Independent
+OMS verified both metadata states and unchanged quantities. A hidden home
+tile retained an old name temporarily; whole-source text absence was not
+used as persistence proof.
+
+[Business-only results](evidence/native-session-corrections.json). The shared
+QA document now includes TC34–TC37 with steps, expected/observed results and
+limits. Input was through native controls, not physical scanner capture.
+No final inventory approval or adjustment occurred.
+
+Native session discard also passed (TC38). Dedicated session
+`POSI_0e961501751dfb7` recorded Brown 1; its actual QA name was
+QA Discardġ (native keyboard composition suffix). Before discard, the team
+summary was Brown 11 / Green 2, four still counting. More → Discard session →
+Discard this session made its native row/detail Voided and OMS
+`SESSION_VOIDED`. The item Brown 1 remains for audit. Summary then showed
+Brown 10 / Green 2, three still counting; other sessions remain
+`SESSION_ASSIGNED`, QA Map B remains 4 / 1, and parent remains
+`CYCLE_CNT_IN_PRGS`. The host tile's generic Session submitted label was
+not used as void-status proof. No session deletion or inventory adjustment.
+The shared QA document now contains 38 cases; remaining gates are explicit.

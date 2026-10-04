@@ -1,0 +1,96 @@
+{
+  "date": "2026-10-04",
+  "testedHead": "21d9a120a1b6a2d103429557913c461cdd83f98e",
+  "implementation": "82773c561bc3e1bfe027f22cf64b80024b7785a3",
+  "surface": "Physical Shopify POS 11.16.2 (530647), Demo / Brooklyn",
+  "countId": "POSC_e21baf00518696e",
+  "sessionId": "POSI_f5f32bb13849738",
+  "manualMatch": {
+    "before": {
+      "10060": 2,
+      "10061": 1
+    },
+    "after": {
+      "10060": 3,
+      "10061": 1
+    },
+    "unmatchedBefore": 1,
+    "unmatchedAfter": 0,
+    "eventsBefore": 4,
+    "eventsAfter": 4,
+    "nativeAndOms": true
+  },
+  "absoluteCorrection": {
+    "enteredTotal": 4,
+    "after": {
+      "10060": 4,
+      "10061": 1
+    },
+    "events": 5,
+    "newestEvent": "Set total 4",
+    "nativeAndOms": true
+  },
+  "submitAndReopen": {
+    "submitted": "SESSION_SUBMITTED",
+    "reopened": "SESSION_ASSIGNED",
+    "parentStatus": "CYCLE_CNT_IN_PRGS",
+    "retainedItems": {
+      "10060": 4,
+      "10061": 1
+    },
+    "retainedEvents": 5,
+    "terminalLockRestored": true,
+    "nativeAndOms": true
+  },
+  "metadata": {
+    "edited": {
+      "name": "QA Map B Edited",
+      "area": "display"
+    },
+    "restored": {
+      "name": "QA Map B",
+      "area": "register",
+      "status": "SESSION_ASSIGNED"
+    },
+    "retainedItems": {
+      "10060": 4,
+      "10061": 1
+    },
+    "nativeAndOms": true
+  },
+  "limitations": [
+    "Native UI input; no external scanner hardware capture",
+    "No final inventory approval or adjustment",
+    "Remaining gates are listed separately in the shared QA document"
+  ],
+  "discard": {
+    "sessionId": "POSI_0e961501751dfb7",
+    "name": "QA Discardġ",
+    "beforeTeam": {
+      "10060": 11,
+      "10061": 2,
+      "sessionsStillCounting": 4
+    },
+    "afterTeam": {
+      "10060": 10,
+      "10061": 2,
+      "sessionsStillCounting": 3
+    },
+    "nativeLabel": "Voided",
+    "omsStatus": "SESSION_VOIDED",
+    "retainedAuditItem": {
+      "10060": 1
+    },
+    "parentStatus": "CYCLE_CNT_IN_PRGS",
+    "otherSessionStatuses": [
+      "SESSION_ASSIGNED",
+      "SESSION_ASSIGNED",
+      "SESSION_ASSIGNED"
+    ],
+    "peerRetainedItems": {
+      "10060": 4,
+      "10061": 1
+    },
+    "nativeAndOms": true
+  }
+}
