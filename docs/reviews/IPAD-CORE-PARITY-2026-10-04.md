@@ -223,3 +223,28 @@ Brown 10 / Green 2, three still counting; other sessions remain
 `CYCLE_CNT_IN_PRGS`. The host tile's generic Session submitted label was
 not used as void-status proof. No session deletion or inventory adjustment.
 The shared QA document now contains 38 cases; remaining gates are explicit.
+
+## Search audit fixes and native follow-up
+
+The completion audit found two source regressions in the refactor: a permanent
+twenty-page Shopify member-search cutoff, and query-cache reuse across
+equal-sized sessions with different products. Fixed in `d0db9c2` / `2a607b0`;
+see [PRODUCT-SEARCH-PAGINATION.md](PRODUCT-SEARCH-PAGINATION.md). The focused
+fixtures reproduce the old failures and pass the new behavior. All 108 tests,
+typecheck and release build passed; gzip 64,982 bytes against gate 65,024.
+Count storage, aggregation, background synchronization and hand-count source
+remain identical to implementation `82773c5`; no new keys or data migration.
+
+On clean `2a607b0`, physical POS resumed QA Map B and restored this terminal's
+lock. Query Gym returned Brown and Green in All and Counted (two products),
+and zero in Uncounted. Independent OMS read remained Brown 4 / Green 1.
+Scan events retained the same five newest-first rows, starting with Set total
+4, and Unmatched (0). Native scanner status was not connected.
+[Business-only measurements](evidence/native-search-follow-up.json).
+
+TC39 and TC40 in the shared QA document distinguish native small-scope checks
+from synthetic 25-page/cache regression tests. Forty cases are documented;
+not every case is native and not every remaining gate is passed. A real
+2,000+ catalogue, physical scanner/camera capture, installed offline behavior,
+native quota/interrupted commit and restricted roles remain unfinished.
+No QA count writes or final inventory adjustment were needed in this pass.
