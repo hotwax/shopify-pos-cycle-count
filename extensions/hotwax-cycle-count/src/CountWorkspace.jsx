@@ -381,8 +381,7 @@ export function CountWorkspace({owner,setHeader}) {
         </s-stack>
       </s-stack>:route!=='hand'&&<s-heading>{title}</s-heading>}
       {error&&<s-banner tone="critical" heading={error}/>}
-      {count?.editable&&!canCount&&<s-banner tone="critical" heading="Scans are not being recorded">
-        {lockedElsewhere?'This session is locked on another terminal.':'This terminal does not hold a confirmed session lock.'}
+      {count?.editable&&!canCount&&<s-banner tone="critical" heading={lockedElsewhere?'Scans are not being recorded: session locked elsewhere.':'Scans are not being recorded: no confirmed session lock.'}>
         <s-button slot="primary-action" disabled={busy||!connected} onClick={reclaim}>Recheck ownership</s-button>
       </s-banner>}
       {!connected&&<s-banner tone="warning" heading="Offline">{canCount?'Keep counting. Scans are saved on this terminal and match and sync after reconnecting.':'Saved sessions are available. Sessions this terminal already holds can keep counting; sync resumes after reconnecting.'}</s-banner>}
