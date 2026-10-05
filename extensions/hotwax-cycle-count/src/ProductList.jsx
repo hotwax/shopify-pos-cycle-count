@@ -67,7 +67,9 @@ function ProductListContent({items,disabled=false,directed=false,onSelect,select
       <s-button slot="primary-action" command="--hide" commandFor={sortId}>Done</s-button>
     </s-modal>}
     {!result.total&&<s-text>No products match this view.</s-text>}
-    <s-stack direction="block" gap="none" key={`${view}:${sort}:${search}:${result.page}`}>
+    {/* Shopify hits can reorder a page after local matches render. Key the
+        bounded native row subtree by that order for both search phases. */}
+    <s-stack direction="block" gap="none" key={`${view}:${sort}:${search}:${result.items.map(item=>item.productId).join(",")}`}>
       {result.items.map(item=><ProductRow key={item.productId} item={item} selected={selected?.has(item.productId)} disabled={disabled} onSelect={onSelect}/>)}
     </s-stack>
     {result.total>PRODUCT_PAGE_SIZE&&<CompactPager {...result} disabled={disabled} onPage={setPage}/>}
