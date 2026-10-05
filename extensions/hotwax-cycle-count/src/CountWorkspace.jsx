@@ -93,9 +93,10 @@ export function CountWorkspace({owner,setHeader}) {
   const canCount=!!count?.editable&&hasScanLock();
   const leaseActive=!!lease&&!lease.available&&(lease.expiresAt==null||lease.expiresAt>leaseNow);
   const offlineCounting=!connected&&canCount;
+  const lockedElsewhere=!!lease&&!lease.available&&!lease.owned;
   const lockUnverified=!connected||!!leaseProblem||!lease||!ownership.current?.confirmed;
-  const lockLabel=offlineCounting?'Offline · saving on this terminal':lockUnverified?'Lock needs recheck':!leaseActive?'Session not locked':lease.owned?'Locked to this terminal':'Locked on another terminal';
-  const lockTone=lockUnverified||!leaseActive?'warning':lease.owned?'success':'critical';
+  const lockLabel=offlineCounting?'Offline · saving on this terminal':lockedElsewhere?'Locked on another terminal':lockUnverified?'Lock needs recheck':!leaseActive?'Session not locked':'Locked to this terminal';
+  const lockTone=lockedElsewhere?'critical':lockUnverified||!leaseActive?'warning':'success';
   const sessionRoute=count?.statusId==='SESSION_SUBMITTED'?'submitted':count?.editable?'count':'readonly';
   latest.current={route,count,stats,canCount,busy,connected,hidMode};
   gate.current=canCount&&!busy&&route==='count';
@@ -380,6 +381,10 @@ export function CountWorkspace({owner,setHeader}) {
         </s-stack>
       </s-stack>:route!=='hand'&&<s-heading>{title}</s-heading>}
       {error&&<s-banner tone="critical" heading={error}/>}
+      {count?.editable&&!canCount&&<s-banner tone="critical" heading="Scans are not being recorded">
+        {lockedElsewhere?'This session is locked on another terminal.':'This terminal does not hold a confirmed session lock.'}
+        <s-button slot="primary-action" disabled={busy||!connected} onClick={reclaim}>Recheck ownership</s-button>
+      </s-banner>}
       {!connected&&<s-banner tone="warning" heading="Offline">{canCount?'Keep counting. Scans are saved on this terminal and match and sync after reconnecting.':'Saved sessions are available. Sessions this terminal already holds can keep counting; sync resumes after reconnecting.'}</s-banner>}
       {route==='opening'&&<s-section heading={opening?.name||'Session'}><s-stack direction="block" gap="base">
         <s-text>{busy?'Opening session…':'The session could not be opened.'}</s-text>
@@ -399,9 +404,8 @@ export function CountWorkspace({owner,setHeader}) {
       </>}
       {count&&['count','context'].includes(route)&&<s-stack direction="block" gap="large">
         {count.countType==='DYNAMIC_COUNT'&&<s-text color="subdued">Dynamic count · Count all units of each product across the store, including back stock. Your team’s sessions are added together.</s-text>}
-        {!canCount&&count.editable&&<s-section heading={leaseActive&&!lease.owned?'Session in use':'Check device ownership'}><s-stack direction="block" gap="base"><s-text>{leaseProblem||(!connected?'Reconnect to confirm this terminal’s lock.':leaseActive&&!lease.owned?'This session is locked on another terminal. Tap the lock badge for details.':'No active lock is confirmed. Recheck ownership to continue.')}</s-text><s-button disabled={busy||!connected} onClick={reclaim}>Recheck ownership</s-button></s-stack></s-section>}
         {route==='context'&&selected?<s-section heading={selected.title}><s-stack direction="block" gap="base"><s-text>{selected.sku} · {selected.quantity??0} counted here</s-text><s-button variant="primary" disabled={busy||!canCount} onClick={async()=>{if(await enqueue({code:selected.sku||selected.productId,productId:selected.productId,source:'product-context'})){context.current=null;setContextProduct(null);go('count');}}}>Count one unit</s-button><s-button disabled={busy||!canCount} onClick={()=>go('product')}>Enter a total quantity</s-button></s-stack></s-section>:<>
-          <ScanFeedback last={last} hidMode={hidMode}/>
+          {canCount&&<ScanFeedback last={last} hidMode={hidMode}/>}
           <s-stack direction="inline" gap="base">
             {sources.includes('camera')&&<s-button disabled={busy||!canCount} onClick={()=>{setHidMode(false);shopify.scanner.showCameraScanner();}}>Scan with camera</s-button>}
             <s-button variant={hidMode?'primary':'secondary'} disabled={busy||!canCount} onClick={()=>{shopify.scanner.hideCameraScanner();setHidMode(value=>!value);}}>Use HID scanner</s-button>
