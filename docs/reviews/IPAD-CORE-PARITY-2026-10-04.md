@@ -515,18 +515,48 @@ event count stayed 55, unmatched stayed 3 and independent OMS totals stayed
 ownership loss is detected; it does not benchmark the pre-check interval.
 The temporary QA lease was released without deleting unrelated locks.
 
-Aditya requested clearer feedback. Implementation `dbe62a2` replaces the
-old ownership section with a critical banner: Scans are not being recorded;
-This session is locked on another terminal. It hides historical ScanFeedback
-while blocked and uses a critical foreign-lock badge. No append/lease/storage
-logic changed. Eight scan-access tests, typecheck, build (64,982 gzip bytes)
-and Shopify Toolkit POS 2026-07 validation passed. Demo release
-`count-lock-banner-2026-10-04-r2`, version `1154624028673`, is active.
-The released artifact contains the new banner. Native verification remains
-pending: normal restart still loaded the preceding 9cb2681 worker body.
-The development preview and tunnel have now been stopped completely.
-Shopify Store data Refresh, a normal POS restart and recreating only the
-permanent home tile did not change the runtime worker hash
-`0a0b6ef4770b62b7966003a52a3f2e111593fed35979c4085dd04ee7bfce062e`.
-The tile is restored. The cause of the stale native bundle is unproven;
-no POS data was cleared and no reinstall or reset was performed.
+## Released native lock banner and reclaim (TC50)
+
+PASS on `bcb301733b94879c5e985660e0859ea62dc7994a`, Demo release
+`count-lock-banner-2026-10-04-r3`, Shopify version `1154641788929`.
+The official `shopify app dev clean` removed the store preview override.
+After Store data Refresh and a normal POS restart, the permanent tile loaded
+the release body; native worker SHA-256 was
+`912e29fe16e7ace68f138466f11db14a08f22d22d0d068989226b9d15b49e4b3`.
+No POS reset, reinstall or data clear was performed.
+
+On the dedicated QA Released Scanner session, a finite foreign-terminal
+lease produced the red Locked on another terminal badge and full red heading:
+**Scans are not being recorded: session locked elsewhere.** Camera, HID and
+hand-count controls were disabled; historical ScanFeedback was hidden.
+The first native r2 attempt omitted descriptive banner children, so r3 puts
+the complete explanation in the supported heading. No scan guard or storage
+logic changed. After releasing only the temporary QA lease, Recheck ownership
+restored Locked to this terminal, POS scanner connected and enabled controls.
+
+[Actual native banner](evidence/released-lock-banner-r3.png).
+Typecheck, build (64,988 gzip bytes) and Shopify Toolkit POS 2026-07 validation
+passed. Eight scan-access tests passed for the underlying dbe62a2 guard/UI
+change. These checks are separate from TC49's actual rejected hardware scans.
+Offline cold start still needs a clean installed retest after preview cleanup;
+the cleanup is not by itself proof of offline acceptance or TC47's root cause.
+
+## Actual iPad camera capture and OMS upload (TC51)
+
+PASS (scoped) on installed r3 / `bcb3017`, QA Released Scanner. Native lock
+was owned and the paired POS scanner connected. Opened Scan with camera;
+Aditya aimed the actual iPad camera at MSH0232Black on the test barcode page.
+The camera repeatedly decoded the barcode while it stayed visible in rapid
+mode. Product 10101 increased 23 → 141, native events 55 → 173; real Demo OMS
+settled at 141. Products 10001/10103 stayed 13/13 and Unmatched stayed 3.
+The native product image and Counted feedback appeared, and Scan events
+was selected automatically. Closed the native camera before hardware testing.
+
+The baseline also uses rapid camera mode with a one-second same-code debounce;
+this is not a new refactor behavior. This proves actual camera callbacks,
+matching, images and upload, not exactly one event per barcode presentation
+or a camera throughput/latency benchmark. Only the dedicated QA session was
+modified; no final inventory approval/adjustment.
+
+[Native camera result](evidence/released-camera-result-r3.png),
+[business-only measurements](evidence/released-camera-r3.json).

@@ -1,0 +1,26 @@
+{
+  "candidate": "bcb301733b94879c5e985660e0859ea62dc7994a",
+  "version": "count-lock-banner-2026-10-04-r3",
+  "sessionId": "POSI_6a2c6d61436018b",
+  "source": "actual iPad camera, user aimed at laptop barcode page",
+  "barcode": "MSH0232Black",
+  "productId": "10101",
+  "nativeEventsBefore": 55,
+  "nativeEventsAfter": 173,
+  "quantitiesBefore": {
+    "10001": 13,
+    "10101": 23,
+    "10103": 13
+  },
+  "quantitiesAfter": {
+    "10001": 13,
+    "10101": 141,
+    "10103": 13
+  },
+  "unmatched": 3,
+  "cameraMode": "rapid",
+  "physicalPresentationCount": null,
+  "baselineSameCodeDebounceMs": 1000,
+  "cameraClosedBeforeHandheldTest": true,
+  "inventoryAdjustment": false
+}

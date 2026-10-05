@@ -5,10 +5,10 @@
   "candidate": "9cb268108e5a1ca8de299f9f41da5e5a8c5412d1",
   "source": "Real Demo OMS enterpriseSearch, same COUNTABLE_FILTERS as app; rows=0; read-only POST",
   "scannerStatus": "POS scanner connected; actual user-operated hardware callbacks and online OMS upload verified",
-  "camera": "Native camera opened; no barcode in view; actual capture not passed",
+  "camera": "PASS scoped: actual iPad camera decoded MSH0232Black; image, automatic Scan events and OMS upload verified",
   "configurationAndPermissionPolicy": "Extension TOML and shared/count-policy.ts identical to cf956cd baseline",
   "inventoryWrites": 0,
-  "cameraFollowUp": "Native scanner camera remained open with no barcode in view after POS idle unlock; actual capture remains unverified.",
+  "cameraFollowUp": "TC51: repeated rapid-mode reads while barcode stayed in view; exact one-event presentation and throughput not claimed",
   "installedCandidateTest": "Installed offline hardware capture and persistence through full POS process restart passed; reconnect/upload recovered 13/14/23 quantities. Full POS cold start while offline failed: permanent tile Loading then App failed to load; restoring network required another online restart. Root cause and baseline difference unproved.",
   "previousShopifyRelease": {
     "versionTag": "count-scan-order-2026-10-03",
@@ -37,7 +37,6 @@
     "proof": "/tmp/hotwax-released-scanner-observation/frame-0.png",
     "notYetVerified": [
       "rapid-scan exact trigger/event counts",
-      "actual camera capture",
       "offline process cold start acceptance"
     ],
     "offlineRun": {
@@ -117,15 +116,17 @@
     "sessionWrites": 1
   },
   "demoRelease": {
-    "candidate": "dbe62a2bd272c14510e4bd76bf23a47b524840bf",
-    "versionTag": "count-lock-banner-2026-10-04-r2",
-    "versionId": "gid://shopify/Version/1154624028673",
+    "candidate": "bcb301733b94879c5e985660e0859ea62dc7994a",
+    "versionTag": "count-lock-banner-2026-10-04-r3",
+    "versionId": "gid://shopify/Version/1154641788929",
     "status": "active",
-    "bundleGzipBytes": 64982,
-    "nativeBannerVerification": "pending; native retains preceding 9cb2681 worker after Store data Refresh, normal restart and permanent tile recreation",
-    "nativeWorkerSha256": "0a0b6ef4770b62b7966003a52a3f2e111593fed35979c4085dd04ee7bfce062e",
-    "deployedArtifactIncludesBanner": true,
+    "bundleGzipBytes": 64988,
+    "nativeBannerVerification": "passed; full red heading, disabled entry controls and hidden historical feedback with finite foreign QA lease; reclaim re-enabled controls",
+    "nativeWorkerSha256": "912e29fe16e7ace68f138466f11db14a08f22d22d0d068989226b9d15b49e4b3",
+    "releaseBodyIncluded": true,
+    "previewOverrideCleaned": true,
     "previewAndTunnelStopped": true,
-    "permanentTileRestored": true
+    "permanentTileRestored": true,
+    "proof": "released-lock-banner-r3.png"
   }
 }
