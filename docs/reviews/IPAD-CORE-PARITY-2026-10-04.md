@@ -363,3 +363,89 @@ identical extension TOML, including `runs_offline = true`. CLI 4.8.4's generated
 development manifest and the served preview metadata both enable that feature.
 The observed offline host block in TC28 therefore was not caused by removing
 the setting. Installed-candidate offline behavior remains unverified.
+
+## Acceptance scope correction
+
+Aditya confirmed that this is a new feature with no legacy cycle counts.
+Legacy migration is excluded from acceptance and further testing. Historical
+migration results are supplemental evidence only. Fresh-session persistence,
+reopen/recovery and storage-capacity behavior remain in scope.
+
+## Large directed-session search follow-up — initial failure
+
+Candidate `5e5c8b5b733826d7d337666536f2cd65961e77da` (implementation
+`2a607b0`) was opened in the physical POS development preview. A dedicated
+real Demo OMS directed count/session, `POSC_0a20261004dc172` /
+`POSI_0a20261004dc172`, contains 1,723 real Brooklyn products. Complete OMS
+readback confirmed 1,723 unique product IDs and no quantities. The fixture was
+created through the real REST contract; creation-form coverage is separate.
+Native session opening took about 7.8 seconds and showed 1,723 products.
+
+Broad query `M` displayed `1245+ products`. Replacing it with `MSH0232`
+left `315+ products · Searching…` and unrelated broader rows visible. A
+focused-keyboard retry, avoiding cached element IDs during typing, visibly
+entered the exact `MSH0232` text and reproduced the stale result state. It
+remained visible after additional waiting and keyboard dismissal. This is
+the initial native search symptom, not a proven SDK or storage root cause.
+
+The harness also produced stale-element errors and an imperfect clear/typing
+attempt; those failures are not application results. Temporary tracing code
+was removed before the focused retry. At that stage no fix had been applied.
+No quantities or final inventory approvals were written for this fixture. The verified follow-up is below.
+
+Follow-up isolation: a separate read-only native SDK probe completed `M`, `MS`
+and `MSH0232` calls in approximately 130, 58 and 27 ms. A second probe used
+`createMemberSearch` with the actual 1,723 saved members and also completed;
+its exact-query variant filtering returned zero scoped remote hits, so it
+is not full exact-search parity. The normal screen reproduced the stale
+search with either its list-container key removed or visible-row enrichment
+disabled. Both temporary changes were reverted before the final fix.
+These observations do not establish a root cause. Reported on
+[PR #1](https://github.com/hotwax/shopify-pos-cycle-count/pull/1#issuecomment-5986491054).
+
+## Native search row replacement fix (TC44)
+
+Implementation `782a30a78e2194478544366b76aac8bc05f77b19` changes only the
+bounded ProductList row subtree key: it includes the ordered product IDs on
+the rendered page. This replaces native rows when Shopify relevance changes
+their order after local matches render. No storage, product matching, count
+quantity or submission logic changed.
+
+On the previous implementation, redacted native tracing showed the `MS`
+Shopify request completed (25 products, 22 scoped hits), and the UI completion
+callback ran, while the screen retained `315+ products · Searching…` and
+broader rows. Removing the parent key, disabling row enrichment and separating
+the controlled input draft did not fix the native symptom; all were reverted.
+The evidence identifies a failure after applying completed results, without
+establishing an SDK, storage or native-renderer root cause.
+
+The final fix was exercised in the actual POS development modal on the
+physical iPad, POS 11.16.2 (530647), using the same real Demo OMS fixture with
+1,723 Brooklyn products. Inspector source verification confirmed the ordered
+row key was loaded, with no temporary tracing or input-draft experiment.
+
+- Broad `M`, then native keyboard narrowing to `MSH0232`: search completed,
+  one correct MSH02-32-Black result and product image. Repeated once: passed.
+- Cleared and entered `MP1133`: search completed with four combined Shopify
+  and local results and images. This verifies responsiveness, not strict
+  SKU-only search precision. A harness assertion expecting two results from
+  a smaller fixture was corrected; it was not an application failure.
+- Opened Hand count, then returned using Count items: native navigation
+  worked and restored the query with four results.
+- No quantity inputs, scan events, inventory adjustments or count writes.
+  Independent complete OMS readback over six pages found 25,863 inventory
+  view rows representing 1,723 unique count items/products, all quantities null.
+
+Automated verification, separate from native proof: 108 tests passed,
+typecheck passed, release build passed (64,989 gzip bytes; gate 65,024),
+Shopify Toolkit POS/API 2026-07 validation passed, and diff check passed.
+
+[Native steps/results](evidence/native-search-row-order.json),
+[complete OMS readback summary](evidence/native-search-row-order-oms.json),
+[one-result native screenshot](evidence/native-search-row-order.png),
+[return with query preserved](evidence/native-search-row-order-return.png).
+
+Full acceptance remains open for physical scanner/camera capture, installed
+candidate offline behavior, a real 2k+ catalogue and restricted-operator
+coverage. This fixture has 1,723 products; it is not a 2k+ benchmark. Legacy
+migration remains excluded by the user's direction.
