@@ -1,0 +1,43 @@
+{
+  "candidate": "82773c561bc3e1bfe027f22cf64b80024b7785a3",
+  "prHeadAtTest": "6121bd1042becb1aae6109e3794a31b7e26d246e",
+  "sessionId": "POSI_0a20261004cafe1",
+  "legacy": {
+    "keyCount": 5,
+    "formats": [
+      "hotwax-count-pages-1",
+      "hotwax-count-pages-1"
+    ],
+    "handDraftPresent": true
+  },
+  "migrated": {
+    "keyCount": 2,
+    "formats": [
+      "hotwax-count-3",
+      "hotwax-count-3"
+    ],
+    "quantities": {
+      "10060": 5,
+      "10061": 1
+    },
+    "syncedRevisions": {
+      "10060": [
+        4,
+        4,
+        5
+      ],
+      "10061": [
+        1,
+        1,
+        1
+      ]
+    },
+    "eventCount": 5,
+    "pendingCount": 1,
+    "event4Applied": 1,
+    "handBatchEvents": 1,
+    "richRecordFields": [],
+    "oldHandDraftAbsent": true,
+    "currentHandDraftAbsent": true
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "date": "2026-10-04",
+  "candidate": "2a607b04781f0c86c402209155d0e01e4a227580",
+  "baseline": "cf956cd88f4f8e7e4e2c162eca5c20bea7930b6e",
+  "native": {
+    "surface": "Shopify POS 11.16.2 (530647), Demo / Brooklyn",
+    "sessionId": "POSI_f5f32bb13849738",
+    "query": "Gym",
+    "allProducts": [
+      "10060",
+      "10061"
+    ],
+    "countedProducts": [
+      "10060",
+      "10061"
+    ],
+    "uncountedProducts": [],
+    "omsItems": {
+      "10060": 4,
+      "10061": 1
+    },
+    "eventRowsNewestFirst": [
+      "Set total 4",
+      "MP1133Brown added 1",
+      "QA-NO-PRODUCT-20261004 added 1",
+      "MP1133Green added 1",
+      "MP1133Brown added 1"
+    ],
+    "unmatched": 0,
+    "terminalLockRestored": true,
+    "scannerStatus": "POS scanner not connected",
+    "countWritesDuringSmoke": false
+  },
+  "automated": {
+    "testsPassed": 108,
+    "typecheck": "passed",
+    "releaseBuild": "passed",
+    "gzipBytes": 64982,
+    "existingGateBytes": 65024,
+    "latePageFixture": {
+      "before": {
+        "calls": 20,
+        "ids": [],
+        "complete": false,
+        "capped": true
+      },
+      "after": {
+        "firstPassCalls": 16,
+        "resumedCalls": 25,
+        "lateFilteredMatch": "uncounted",
+        "complete": true
+      }
+    },
+    "sameSizeDifferentSessionFixture": {
+      "before": {
+        "calls": 1,
+        "secondSessionIds": [
+          "first"
+        ]
+      },
+      "after": {
+        "calls": 2,
+        "secondSessionIds": [
+          "second"
+        ]
+      }
+    }
+  },
+  "limits": [
+    "Native scoped search covered two products, not 25 real search pages or 2,000+ products",
+    "Native scanner was disconnected; external scanner/camera capture still unverified",
+    "Offline installed candidate, quota/interrupted native commits and restricted roles remain unfinished"
+  ]
+}

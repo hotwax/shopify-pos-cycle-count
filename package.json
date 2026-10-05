@@ -1,0 +1,31 @@
+{
+  "name": "hotwax-cycle-count",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "workspaces": [
+    "extensions/*"
+  ],
+  "scripts": {
+    "shopify": "shopify",
+    "build": "node scripts/configure-oms.mjs --release && shopify app build && node scripts/check-bundle.mjs",
+    "dev": "node scripts/configure-oms.mjs && shopify app dev",
+    "info": "shopify app info",
+    "generate": "shopify app generate",
+    "deploy": "node scripts/configure-oms.mjs --release && shopify app build && node scripts/check-bundle.mjs && shopify app deploy",
+    "pretest": "node scripts/configure-oms.mjs --release --if-missing",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "pretypecheck": "node scripts/configure-oms.mjs --release --if-missing",
+    "typecheck": "tsc --noEmit"
+  },
+  "trustedDependencies": [
+    "@shopify/plugin-cloudflare"
+  ],
+  "author": "adityapatel",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

@@ -1,0 +1,593 @@
+{
+  "before": [
+    {
+      "type": "XCUIElementTypeButton",
+      "label": "Scan with camera",
+      "x": "254",
+      "y": "334",
+      "width": "171",
+      "height": "48"
+    },
+    {
+      "type": "XCUIElementTypeStaticText",
+      "label": "Scan with camera",
+      "x": "270",
+      "y": "346",
+      "width": "139",
+      "height": "24"
+    },
+    {
+      "type": "XCUIElementTypeStaticText",
+      "label": "Scan with camera",
+      "x": "270",
+      "y": "346",
+      "width": "139",
+      "height": "24"
+    },
+    {
+      "type": "XCUIElementTypeButton",
+      "label": "Use HID scanner",
+      "x": "441",
+      "y": "334",
+      "width": "163",
+      "height": "48"
+    },
+    {
+      "type": "XCUIElementTypeButton",
+      "label": "Hand count",
+      "x": "619",
+      "y": "334",
+      "width": "123",
+      "height": "48"
+    },
+    {
+      "type": "XCUIElementTypeStaticText",
+      "label": "Hand count",
+      "x": "635",
+      "y": "346",
+      "width": "91",
+      "height": "24"
+    },
+    {
+      "type": "XCUIElementTypeStaticText",
+      "label": "Hand count",
+      "x": "635",
+      "y": "346",
+      "width": "91",
+      "height": "24"
+    },
+    {
+      "type": "XCUIElementTypeButton",
+      "label": "Submit session",
+      "x": "254",
+      "y": "565",
+      "width": "881",
+      "height": "48"
+    },
+    {
+      "type": "XCUIElementTypeStaticText",
+      "label": "Submit session",
+      "x": "635",
+      "y": "577",
+      "width": "119",
+      "height": "24"
+    },
+    {
+      "type": "XCUIElementTypeStaticText",
+      "label": "Submit session",
+      "x": "635",
+      "y": "577",
+      "width": "119",
+      "height": "24"
+    },
+    {
+      "type": "XCUIElementTypeButton",
+      "label": "All products",
+      "x": "258",
+      "y": "641",
+      "width": "213",
+      "height": "37"
+    },
+    {
+      "type": "XCUIElementTypeStaticText",
+      "label": "All products",
+      "x": "323",
+      "y": "650",
+      "width": "83",
+      "height": "19"
+    },
+    {
+      "type": "XCUIElementTypeStaticText",
+      "label": "All products",
+      "x": "323",
+      "y": "650",
+      "width": "83",
+      "height": "19"
+    },
+    {
+      "type": "XCUIElementTypeButton",
+      "label": "Uncounted",
+      "x": "478",
+      "y": "641",
+      "width": "213",
+      "height": "37"
+    },
+    {
+      "type": "XCUIElementTypeStaticText",
+      "label": "Uncounted",
+      "x": "547",
+      "y": "650",
+      "width": "75",
+      "height": "19"
+    },
+    {
+      "type": "XCUIElementTypeStaticText",
+      "label": "Uncounted",
+      "x": "547",
+      "y": "650",
+      "width": "75",
+      "height": "19"
+    },
+    {
+      "type": "XCUIElementTypeButton",
+      "label": "Scan events",
+      "x": "698",
+      "y": "641",
+      "width": "213",
+      "height": "37"
+    },
+    {
+      "type": "XCUIElementTypeStaticText",
+      "label": "Scan events",
+      "x": "763",
+      "y": "650",
+      "width": "83",
+      "height": "19"
+    },
+    {
+      "type": "XCUIElementTypeStaticText",
+      "label": "Scan events",
+      "x": "763",
+      "y": "650",
+      "width": "83",
+      "height": "19"
+    },
+    {
+      "type": "XCUIElementTypeButton",
+      "label": "Counted",
+      "x": "918",
+      "y": "641",
+      "width": "213",
+      "height": "37"
+    },
+    {
+      "type": "XCUIElementTypeStaticText",
+      "label": "Counted",
+      "x": "995",
+      "y": "650",
+      "width": "59",
+      "height": "19"
+    },
+    {
+      "type": "XCUIElementTypeStaticText",
+      "label": "Counted",
+      "x": "995",
+      "y": "650",
+      "width": "59",
+      "height": "19"
+    },
+    {
+      "type": "XCUIElementTypeStaticText",
+      "label": "Uncounted",
+      "x": "1006",
+      "y": "881",
+      "width": "83",
+      "height": "22"
+    },
+    {
+      "type": "XCUIElementTypeStaticText",
+      "label": "Uncounted",
+      "x": "1006",
+      "y": "881",
+      "width": "83",
+      "height": "22"
+    }
+  ],
+  "steps": [
+    {
+      "code": "MSH0232Black",
+      "immediate": [
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Counted",
+          "x": "254",
+          "y": "203",
+          "width": "881",
+          "height": "19"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Counted",
+          "x": "254",
+          "y": "203",
+          "width": "881",
+          "height": "19"
+        },
+        {
+          "type": "XCUIElementTypeButton",
+          "label": "Scan with camera",
+          "x": "254",
+          "y": "334",
+          "width": "171",
+          "height": "48"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Scan with camera",
+          "x": "270",
+          "y": "346",
+          "width": "139",
+          "height": "24"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Scan with camera",
+          "x": "270",
+          "y": "346",
+          "width": "139",
+          "height": "24"
+        },
+        {
+          "type": "XCUIElementTypeButton",
+          "label": "Use HID scanner",
+          "x": "441",
+          "y": "334",
+          "width": "163",
+          "height": "48"
+        },
+        {
+          "type": "XCUIElementTypeButton",
+          "label": "Hand count",
+          "x": "619",
+          "y": "334",
+          "width": "123",
+          "height": "48"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Hand count",
+          "x": "635",
+          "y": "346",
+          "width": "91",
+          "height": "24"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Hand count",
+          "x": "635",
+          "y": "346",
+          "width": "91",
+          "height": "24"
+        },
+        {
+          "type": "XCUIElementTypeButton",
+          "label": "Submit session",
+          "x": "254",
+          "y": "565",
+          "width": "881",
+          "height": "48"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Submit session",
+          "x": "635",
+          "y": "577",
+          "width": "119",
+          "height": "24"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Submit session",
+          "x": "635",
+          "y": "577",
+          "width": "119",
+          "height": "24"
+        },
+        {
+          "type": "XCUIElementTypeButton",
+          "label": "All products",
+          "x": "258",
+          "y": "641",
+          "width": "213",
+          "height": "37"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "All products",
+          "x": "323",
+          "y": "650",
+          "width": "83",
+          "height": "19"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "All products",
+          "x": "323",
+          "y": "650",
+          "width": "83",
+          "height": "19"
+        },
+        {
+          "type": "XCUIElementTypeButton",
+          "label": "Uncounted",
+          "x": "478",
+          "y": "641",
+          "width": "213",
+          "height": "37"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Uncounted",
+          "x": "547",
+          "y": "650",
+          "width": "75",
+          "height": "19"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Uncounted",
+          "x": "547",
+          "y": "650",
+          "width": "75",
+          "height": "19"
+        },
+        {
+          "type": "XCUIElementTypeButton",
+          "label": "Scan events",
+          "x": "698",
+          "y": "641",
+          "width": "213",
+          "height": "37"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Scan events",
+          "x": "763",
+          "y": "650",
+          "width": "83",
+          "height": "19"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Scan events",
+          "x": "763",
+          "y": "650",
+          "width": "83",
+          "height": "19"
+        },
+        {
+          "type": "XCUIElementTypeButton",
+          "label": "Counted",
+          "x": "918",
+          "y": "641",
+          "width": "213",
+          "height": "37"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Counted",
+          "x": "995",
+          "y": "650",
+          "width": "59",
+          "height": "19"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Counted",
+          "x": "995",
+          "y": "650",
+          "width": "59",
+          "height": "19"
+        }
+      ],
+      "settled": [
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Counted",
+          "x": "254",
+          "y": "203",
+          "width": "881",
+          "height": "19"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Counted",
+          "x": "254",
+          "y": "203",
+          "width": "881",
+          "height": "19"
+        },
+        {
+          "type": "XCUIElementTypeButton",
+          "label": "Scan with camera",
+          "x": "254",
+          "y": "334",
+          "width": "171",
+          "height": "48"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Scan with camera",
+          "x": "270",
+          "y": "346",
+          "width": "139",
+          "height": "24"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Scan with camera",
+          "x": "270",
+          "y": "346",
+          "width": "139",
+          "height": "24"
+        },
+        {
+          "type": "XCUIElementTypeButton",
+          "label": "Use HID scanner",
+          "x": "441",
+          "y": "334",
+          "width": "163",
+          "height": "48"
+        },
+        {
+          "type": "XCUIElementTypeButton",
+          "label": "Hand count",
+          "x": "619",
+          "y": "334",
+          "width": "123",
+          "height": "48"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Hand count",
+          "x": "635",
+          "y": "346",
+          "width": "91",
+          "height": "24"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Hand count",
+          "x": "635",
+          "y": "346",
+          "width": "91",
+          "height": "24"
+        },
+        {
+          "type": "XCUIElementTypeButton",
+          "label": "Submit session",
+          "x": "254",
+          "y": "565",
+          "width": "881",
+          "height": "48"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Submit session",
+          "x": "635",
+          "y": "577",
+          "width": "119",
+          "height": "24"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Submit session",
+          "x": "635",
+          "y": "577",
+          "width": "119",
+          "height": "24"
+        },
+        {
+          "type": "XCUIElementTypeButton",
+          "label": "All products",
+          "x": "258",
+          "y": "641",
+          "width": "213",
+          "height": "37"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "All products",
+          "x": "323",
+          "y": "650",
+          "width": "83",
+          "height": "19"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "All products",
+          "x": "323",
+          "y": "650",
+          "width": "83",
+          "height": "19"
+        },
+        {
+          "type": "XCUIElementTypeButton",
+          "label": "Uncounted",
+          "x": "478",
+          "y": "641",
+          "width": "213",
+          "height": "37"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Uncounted",
+          "x": "547",
+          "y": "650",
+          "width": "75",
+          "height": "19"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Uncounted",
+          "x": "547",
+          "y": "650",
+          "width": "75",
+          "height": "19"
+        },
+        {
+          "type": "XCUIElementTypeButton",
+          "label": "Scan events",
+          "x": "698",
+          "y": "641",
+          "width": "213",
+          "height": "37"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Scan events",
+          "x": "763",
+          "y": "650",
+          "width": "83",
+          "height": "19"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Scan events",
+          "x": "763",
+          "y": "650",
+          "width": "83",
+          "height": "19"
+        },
+        {
+          "type": "XCUIElementTypeButton",
+          "label": "Counted",
+          "x": "918",
+          "y": "641",
+          "width": "213",
+          "height": "37"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Counted",
+          "x": "995",
+          "y": "650",
+          "width": "59",
+          "height": "19"
+        },
+        {
+          "type": "XCUIElementTypeStaticText",
+          "label": "Counted",
+          "x": "995",
+          "y": "650",
+          "width": "59",
+          "height": "19"
+        }
+      ],
+      "feedback": [
+        "Counted",
+        "Up to date"
+      ]
+    }
+  ]
+}

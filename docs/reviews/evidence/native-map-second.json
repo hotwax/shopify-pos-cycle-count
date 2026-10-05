@@ -1,0 +1,38 @@
+[
+  {
+    "at": 1791144027159,
+    "stage": "enrichScan",
+    "phase": "begin"
+  },
+  {
+    "at": 1791144027212,
+    "stage": "enrichScan",
+    "phase": "end",
+    "variantId": 45679042199706,
+    "hasImage": true
+  },
+  {
+    "at": 1791144027212,
+    "stage": "shared-map",
+    "variantId": 45679042199706,
+    "productId": "10060"
+  },
+  {
+    "at": 1791144027212,
+    "stage": "shared-map",
+    "variantId": 45679042199706,
+    "productId": "10060"
+  },
+  {
+    "at": 1791144027212,
+    "stage": "shared-map",
+    "variantId": 45679042199706,
+    "productId": "10060"
+  },
+  {
+    "at": 1791144027212,
+    "stage": "shared-map",
+    "variantId": 45679042199706,
+    "productId": "10060"
+  }
+]

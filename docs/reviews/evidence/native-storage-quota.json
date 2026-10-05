@@ -1,0 +1,51 @@
+{
+  "date": "2026-10-04",
+  "candidateSha": "b68d0db0ad426b3c279e60e2b5976d2426f5e0a7",
+  "implementationSha": "2a607b04781f0c86c402209155d0e01e4a227580",
+  "surface": "Physical iPad, Shopify POS 11.16.2 (530647), candidate development modal",
+  "storage": "Actual Shopify Storage API; unchanged candidate CountStorage.save/load",
+  "initialKeys": 30,
+  "qaDocumentKeys": 1,
+  "qaFillerWrites": 69,
+  "keysAtLimit": 100,
+  "nativeQuotaError": "Storage count exceeded [extension namespace redacted]",
+  "existingKeyOverwriteSucceeded": true,
+  "overflowAttemptRecords": 7000,
+  "overflowRejected": true,
+  "applicationError": "This POS device has no free count storage. Finish and sync its other saved counts before adding more.",
+  "previousDocumentIntactOnFreshLoad": true,
+  "cleanup": {
+    "onlyUniqueQaPrefixDeleted": true,
+    "qaKeysRemaining": 0,
+    "finalKeys": 30,
+    "allOriginalKeysPresent": true,
+    "countDocumentFingerprintsUnchanged": true,
+    "error": null
+  },
+  "normalFlowAfterProbeRemoval": {
+    "originalModalRestored": true,
+    "posRestartWithoutReset": true,
+    "localPreviewVerified": true,
+    "sessionId": "POSI_2dcda8314562d57",
+    "sessionName": "QA Offline Control Center",
+    "nativeInput": "MP1133Brown plus Return, automated native text input",
+    "previousOmsQuantity": 1,
+    "finalOmsQuantity": 2,
+    "hotwaxProductId": "10060"
+  },
+  "limits": [
+    "Not physical scanner proof.",
+    "No naturally lost native acknowledgement was induced.",
+    "Not all crash boundaries or a many-session performance benchmark.",
+    "Temporary probe and clean preview initially needed a POS process restart to reload.",
+    "Generic row accessibility clicks did not navigate; a direct name tap did. ActionRow source is unchanged from baseline."
+  ],
+  "offlineConfigurationAudit": {
+    "baselineAndCandidateExtensionTomlIdentical": true,
+    "configuredRunsOffline": true,
+    "generatedDevManifestRunsOffline": true,
+    "servedPreviewMetadataRunsOffline": true,
+    "cliVersion": "4.8.4",
+    "installedCandidateOfflineTested": false
+  }
+}

@@ -1,0 +1,30 @@
+[
+  {
+    "at": 1791143790579,
+    "stage": "enrichScan",
+    "phase": "begin"
+  },
+  {
+    "at": 1791143790646,
+    "stage": "enrichScan",
+    "phase": "end",
+    "variantId": 45679042199706,
+    "hasImage": true
+  },
+  {
+    "at": 1791143790647,
+    "stage": "lookupIdentityBatch",
+    "phase": "begin"
+  },
+  {
+    "at": 1791143790879,
+    "stage": "lookupIdentityBatch",
+    "phase": "end",
+    "matches": [
+      {
+        "productId": "10060",
+        "variantId": 45679042199706
+      }
+    ]
+  }
+]
