@@ -1,0 +1,98 @@
+{
+  "candidate": "9cb268108e5a1ca8de299f9f41da5e5a8c5412d1",
+  "release": {
+    "versionTag": "count-storage-parity-2026-10-04",
+    "versionId": "gid://shopify/Version/1154569175041",
+    "status": "active",
+    "candidate": "9cb268108e5a1ca8de299f9f41da5e5a8c5412d1",
+    "bundleSha256": "ef9f6e3612ecf11e286978bfdaae31aef3b8cbc6c19095ba575482a9e458e2cb",
+    "bundleGzipBytes": 64989,
+    "configValidation": "valid, zero issues",
+    "nativeOpenedFrom": "HotWax Cycle Count, Scans need attention permanent tile",
+    "nativeSession": "QA Released Scanner",
+    "nativeLock": "Locked to this terminal",
+    "nativeScannerStatus": "POS scanner connected",
+    "runtimeReleaseBodyMatched": true,
+    "runtimeReleaseWorker": "worker:0.2 and worker:0.1",
+    "inventoryApproval": false,
+    "nativeSessionId": "POSI_6a2c6d61436018b",
+    "nativeCountId": "POSC_e21baf00518696e",
+    "nativeReady": true,
+    "runtimeWorkerSha256": "0a0b6ef4770b62b7966003a52a3f2e111593fed35979c4085dd04ee7bfce062e",
+    "runtimeProof": "Release code body matches; host wrapper differs. Permanent tile after normal POS restart; local preview and tunnel suspended; real Demo navigation and session creation verified.",
+    "omsReadback": {
+      "sessionStatus": "SESSION_ASSIGNED",
+      "facilityAreaId": "back_stock"
+    },
+    "sessionWrites": 1
+  },
+  "sessionId": "POSI_6a2c6d61436018b",
+  "countId": "POSC_e21baf00518696e",
+  "cases": {
+    "TC45": "actual online matched hardware scan and upload scoped pass",
+    "TC46": "offline hardware capture, durable saved quantities and reconnect upload scoped pass",
+    "TC47": "offline POS process cold start failed; no baseline regression determination",
+    "TC48": "Hardware unmatched persisted, native retry feedback, unmatched removal and matched reversal scoped pass"
+  },
+  "matchedQuantityReadbacks": {
+    "preOffline": [
+      {
+        "seq": "01",
+        "productId": "10001",
+        "quantity": 9
+      },
+      {
+        "seq": "02",
+        "productId": "10103",
+        "quantity": 7
+      },
+      {
+        "seq": "03",
+        "productId": "10101",
+        "quantity": 22
+      }
+    ],
+    "whileOffline": [
+      {
+        "seq": "01",
+        "productId": "10001",
+        "quantity": 9
+      },
+      {
+        "seq": "02",
+        "productId": "10103",
+        "quantity": 7
+      },
+      {
+        "seq": "03",
+        "productId": "10101",
+        "quantity": 22
+      }
+    ],
+    "afterRecovery": [
+      {
+        "seq": "01",
+        "productId": "10001",
+        "quantity": 13
+      },
+      {
+        "seq": "02",
+        "productId": "10103",
+        "quantity": 14
+      },
+      {
+        "seq": "03",
+        "productId": "10101",
+        "quantity": 23
+      }
+    ]
+  },
+  "unmatchedPersisted": 4,
+  "finalInventoryApproval": false,
+  "inventoryAdjustment": false,
+  "afterMatchedUndo": {
+    "10001": 13,
+    "10103": 13,
+    "10101": 23
+  }
+}

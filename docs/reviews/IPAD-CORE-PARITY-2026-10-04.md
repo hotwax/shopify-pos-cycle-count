@@ -362,7 +362,7 @@ Offline configuration comparison: baseline `cf956cd` and the candidate have
 identical extension TOML, including `runs_offline = true`. CLI 4.8.4's generated
 development manifest and the served preview metadata both enable that feature.
 The observed offline host block in TC28 therefore was not caused by removing
-the setting. Installed-candidate offline behavior remains unverified.
+the setting. Installed-candidate results are recorded in TC46–TC47 below; the earlier development-preview result is separate.
 
 ## Acceptance scope correction
 
@@ -449,3 +449,56 @@ Full acceptance remains open for physical scanner/camera capture, installed
 candidate offline behavior, a real 2k+ catalogue and restricted-operator
 coverage. This fixture has 1,723 products; it is not a 2k+ benchmark. Legacy
 migration remains excluded by the user's direction.
+
+## Installed release and physical offline scanner (TC45–TC47)
+
+Candidate `9cb268108e5a1ca8de299f9f41da5e5a8c5412d1` is active in Demo
+as `count-storage-parity-2026-10-04` (Shopify version `1154569175041`).
+The physical iPad opened the permanent tile with local preview and tunnel
+suspended. Runtime inspection matched the release code body. QA session
+`POSI_6a2c6d61436018b` (QA Released Scanner), under count
+`POSC_e21baf00518696e` (QA Native D0), used real Demo OMS.
+
+TC45 scoped pass: actual paired hardware callbacks recorded three products,
+showed an image and switched to Scan events. Online OMS quantities were
+9/7/22 for HotWax products 10001/10103/10101. The user scanned an uncontrolled
+number of times; no exact physical-trigger or latency benchmark is claimed.
+
+TC46 scoped pass: disconnected Wi-Fi, retained Bluetooth scanner connectivity
+and switched HID mode off. Actual hardware scans produced native totals
+13/14/23 and four unmatched HWCCTEST404 events. Independent OMS stayed
+9/7/22 while offline. After normal process restart, network restoration, a
+second online restart and Resume counting, saved native totals and all four
+unmatched events recovered. Independent OMS then became exactly 13/14/23.
+This proves these persisted quantities and reconnect upload, not an exact
+physical-trigger count or missed/duplicate-event performance.
+
+TC47 failed gate: the first full POS restart while offline left the permanent
+tile at Loading…, then App failed to load. Restoring Wi-Fi and tapping the
+failed tile did not recover it; the online restart did. Baseline and candidate
+have identical `runs_offline = true`. The cause and whether this differs from
+the baseline are unproved. Offline cold-start acceptance remains open.
+
+[Business-only readback](evidence/released-scanner-offline.json),
+[offline native totals](evidence/released-offline-counts.png),
+[recovered unmatched events](evidence/released-unmatched-four.png).
+No reset/data clearing, final inventory approval or inventory adjustment.
+The team QA Google Doc records these separate outcomes.
+
+## Physical unmatched events, retry and Undo (TC48)
+
+On the same installed candidate/session, Unmatched (4) showed four actual
+hardware HWCCTEST404 events with red badges. Retry matching returned explicit
+`0 scans matched · 4 still unmatched` feedback. Undo one unmatched event changed
+the live filter to 3; All events retained that original event as Removed.
+The retry-result banner continued displaying its prior result of four after
+the undo, while the current filter correctly displayed three.
+
+Undo a matched MSH0234Black scan appended a Removed 1 event with product image
+and disabled Undo on the original. Real OMS product 10103 decreased 14 → 13;
+10001/10101 remained 13/23. This validates native controls against actual
+physical-scanner events. It is separate from exact trigger-count/latency proof.
+
+[Retry feedback](evidence/released-retry-feedback.png),
+[unmatched Undo](evidence/released-unmatched-undo.png),
+[matched reversal](evidence/released-matched-undo.png).

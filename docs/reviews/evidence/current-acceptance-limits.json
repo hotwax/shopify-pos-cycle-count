@@ -1,0 +1,103 @@
+{
+  "countable": 1771,
+  "variants": 1770,
+  "shopMapped": 1726,
+  "candidate": "9cb268108e5a1ca8de299f9f41da5e5a8c5412d1",
+  "source": "Real Demo OMS enterpriseSearch, same COUNTABLE_FILTERS as app; rows=0; read-only POST",
+  "scannerStatus": "POS scanner connected; actual user-operated hardware callbacks and online OMS upload verified",
+  "camera": "Native camera opened; no barcode in view; actual capture not passed",
+  "configurationAndPermissionPolicy": "Extension TOML and shared/count-policy.ts identical to cf956cd baseline",
+  "inventoryWrites": 0,
+  "cameraFollowUp": "Native scanner camera remained open with no barcode in view after POS idle unlock; actual capture remains unverified.",
+  "installedCandidateTest": "Installed offline hardware capture and persistence through full POS process restart passed; reconnect/upload recovered 13/14/23 quantities. Full POS cold start while offline failed: permanent tile Loading then App failed to load; restoring network required another online restart. Root cause and baseline difference unproved.",
+  "demoRelease": {
+    "versionTag": "count-storage-parity-2026-10-04",
+    "versionId": "gid://shopify/Version/1154569175041",
+    "status": "active",
+    "candidate": "9cb268108e5a1ca8de299f9f41da5e5a8c5412d1",
+    "bundleSha256": "ef9f6e3612ecf11e286978bfdaae31aef3b8cbc6c19095ba575482a9e458e2cb",
+    "bundleGzipBytes": 64989,
+    "configValidation": "valid, zero issues",
+    "nativeOpenedFrom": "HotWax Cycle Count, Scans need attention permanent tile",
+    "nativeSession": "QA Released Scanner",
+    "nativeLock": "Locked to this terminal",
+    "nativeScannerStatus": "POS scanner connected",
+    "runtimeReleaseBodyMatched": true,
+    "runtimeReleaseWorker": "worker:0.2 and worker:0.1",
+    "inventoryApproval": false,
+    "nativeSessionId": "POSI_6a2c6d61436018b",
+    "nativeCountId": "POSC_e21baf00518696e",
+    "nativeReady": true,
+    "runtimeWorkerSha256": "0a0b6ef4770b62b7966003a52a3f2e111593fed35979c4085dd04ee7bfce062e",
+    "runtimeProof": "Release code body matches; host wrapper differs. Permanent tile after normal POS restart; local preview and tunnel suspended; real Demo navigation and session creation verified.",
+    "omsReadback": {
+      "sessionStatus": "SESSION_ASSIGNED",
+      "facilityAreaId": "back_stock"
+    },
+    "sessionWrites": 1
+  },
+  "previousShopifyRelease": {
+    "versionTag": "count-scan-order-2026-10-03",
+    "versionId": "gid://shopify/Version/1153896054785",
+    "createdAtAsReported": "2026-10-04 03:20:23",
+    "source": "shopify app versions list --json",
+    "candidateVersionListed": false
+  },
+  "hardwareScanner": {
+    "scope": "Actual paired POS scanner, matched/unmatched events, images, automatic Scan events tab, online upload, offline durable capture and reconnect upload; exact hardware trigger count and latency not measured",
+    "sessionId": "POSI_6a2c6d61436018b",
+    "observedOmsItems": [
+      {
+        "productId": "10001",
+        "quantity": 9
+      },
+      {
+        "productId": "10103",
+        "quantity": 7
+      },
+      {
+        "productId": "10101",
+        "quantity": 22
+      }
+    ],
+    "proof": "/tmp/hotwax-released-scanner-observation/frame-0.png",
+    "notYetVerified": [
+      "foreign-lock hardware callback",
+      "rapid-scan exact trigger/event counts",
+      "actual camera capture",
+      "offline process cold start acceptance"
+    ],
+    "offlineRun": {
+      "sessionId": "POSI_6a2c6d61436018b",
+      "hidMode": false,
+      "omsWhileOffline": {
+        "10001": 9,
+        "10103": 7,
+        "10101": 22
+      },
+      "localOfflineAndOmsAfterRecovery": {
+        "10001": 13,
+        "10103": 14,
+        "10101": 23
+      },
+      "unmatchedSurvivedRestart": 4,
+      "exactPhysicalTriggerTotal": null,
+      "dataCleared": false,
+      "offlineColdStart": "failed; baseline difference unproved",
+      "onlineRecovery": "passed after normal online POS restart and Resume counting"
+    },
+    "retryUndo": {
+      "retryFeedback": "0 scans matched \u00b7 4 still unmatched",
+      "unmatchedBefore": 4,
+      "unmatchedAfterUndo": 3,
+      "matchedUndoProductId": "10103",
+      "omsAfterUndo": {
+        "10001": 13,
+        "10103": 13,
+        "10101": 23
+      },
+      "physicalEventUndo": true,
+      "historicalRetryBannerAfterUndo": "previous result retained; live filter correct"
+    }
+  }
+}
