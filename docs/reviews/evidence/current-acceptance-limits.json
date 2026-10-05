@@ -10,32 +10,6 @@
   "inventoryWrites": 0,
   "cameraFollowUp": "Native scanner camera remained open with no barcode in view after POS idle unlock; actual capture remains unverified.",
   "installedCandidateTest": "Installed offline hardware capture and persistence through full POS process restart passed; reconnect/upload recovered 13/14/23 quantities. Full POS cold start while offline failed: permanent tile Loading then App failed to load; restoring network required another online restart. Root cause and baseline difference unproved.",
-  "demoRelease": {
-    "versionTag": "count-storage-parity-2026-10-04",
-    "versionId": "gid://shopify/Version/1154569175041",
-    "status": "active",
-    "candidate": "9cb268108e5a1ca8de299f9f41da5e5a8c5412d1",
-    "bundleSha256": "ef9f6e3612ecf11e286978bfdaae31aef3b8cbc6c19095ba575482a9e458e2cb",
-    "bundleGzipBytes": 64989,
-    "configValidation": "valid, zero issues",
-    "nativeOpenedFrom": "HotWax Cycle Count, Scans need attention permanent tile",
-    "nativeSession": "QA Released Scanner",
-    "nativeLock": "Locked to this terminal",
-    "nativeScannerStatus": "POS scanner connected",
-    "runtimeReleaseBodyMatched": true,
-    "runtimeReleaseWorker": "worker:0.2 and worker:0.1",
-    "inventoryApproval": false,
-    "nativeSessionId": "POSI_6a2c6d61436018b",
-    "nativeCountId": "POSC_e21baf00518696e",
-    "nativeReady": true,
-    "runtimeWorkerSha256": "0a0b6ef4770b62b7966003a52a3f2e111593fed35979c4085dd04ee7bfce062e",
-    "runtimeProof": "Release code body matches; host wrapper differs. Permanent tile after normal POS restart; local preview and tunnel suspended; real Demo navigation and session creation verified.",
-    "omsReadback": {
-      "sessionStatus": "SESSION_ASSIGNED",
-      "facilityAreaId": "back_stock"
-    },
-    "sessionWrites": 1
-  },
   "previousShopifyRelease": {
     "versionTag": "count-scan-order-2026-10-03",
     "versionId": "gid://shopify/Version/1153896054785",
@@ -62,7 +36,6 @@
     ],
     "proof": "/tmp/hotwax-released-scanner-observation/frame-0.png",
     "notYetVerified": [
-      "foreign-lock hardware callback",
       "rapid-scan exact trigger/event counts",
       "actual camera capture",
       "offline process cold start acceptance"
@@ -98,6 +71,61 @@
       },
       "physicalEventUndo": true,
       "historicalRetryBannerAfterUndo": "previous result retained; live filter correct"
+    },
+    "foreignLock": {
+      "testedCandidate": "9cb268108e5a1ca8de299f9f41da5e5a8c5412d1",
+      "sessionId": "POSI_6a2c6d61436018b",
+      "userConfirmedAttemptedScans": 2,
+      "code": "MSH0232Black",
+      "eventsBefore": 55,
+      "eventsAfter": 55,
+      "unmatchedBefore": 3,
+      "unmatchedAfter": 3,
+      "quantitiesBeforeAndAfter": {
+        "10001": 13,
+        "10103": 13,
+        "10101": 23
+      },
+      "testScope": "after native ownership check paused scanning, not pre-check timing",
+      "temporaryTestLeaseReleased": true
     }
+  },
+  "storageParityRelease": {
+    "versionTag": "count-storage-parity-2026-10-04",
+    "versionId": "gid://shopify/Version/1154569175041",
+    "status": "inactive",
+    "candidate": "9cb268108e5a1ca8de299f9f41da5e5a8c5412d1",
+    "bundleSha256": "ef9f6e3612ecf11e286978bfdaae31aef3b8cbc6c19095ba575482a9e458e2cb",
+    "bundleGzipBytes": 64989,
+    "configValidation": "valid, zero issues",
+    "nativeOpenedFrom": "HotWax Cycle Count, Scans need attention permanent tile",
+    "nativeSession": "QA Released Scanner",
+    "nativeLock": "Locked to this terminal",
+    "nativeScannerStatus": "POS scanner connected",
+    "runtimeReleaseBodyMatched": true,
+    "runtimeReleaseWorker": "worker:0.2 and worker:0.1",
+    "inventoryApproval": false,
+    "nativeSessionId": "POSI_6a2c6d61436018b",
+    "nativeCountId": "POSC_e21baf00518696e",
+    "nativeReady": true,
+    "runtimeWorkerSha256": "0a0b6ef4770b62b7966003a52a3f2e111593fed35979c4085dd04ee7bfce062e",
+    "runtimeProof": "Release code body matches; host wrapper differs. Permanent tile after normal POS restart; local preview and tunnel suspended; real Demo navigation and session creation verified.",
+    "omsReadback": {
+      "sessionStatus": "SESSION_ASSIGNED",
+      "facilityAreaId": "back_stock"
+    },
+    "sessionWrites": 1
+  },
+  "demoRelease": {
+    "candidate": "dbe62a2bd272c14510e4bd76bf23a47b524840bf",
+    "versionTag": "count-lock-banner-2026-10-04-r2",
+    "versionId": "gid://shopify/Version/1154624028673",
+    "status": "active",
+    "bundleGzipBytes": 64982,
+    "nativeBannerVerification": "pending; native retains preceding 9cb2681 worker after Store data Refresh, normal restart and permanent tile recreation",
+    "nativeWorkerSha256": "0a0b6ef4770b62b7966003a52a3f2e111593fed35979c4085dd04ee7bfce062e",
+    "deployedArtifactIncludesBanner": true,
+    "previewAndTunnelStopped": true,
+    "permanentTileRestored": true
   }
 }

@@ -502,3 +502,31 @@ physical-scanner events. It is separate from exact trigger-count/latency proof.
 [Retry feedback](evidence/released-retry-feedback.png),
 [unmatched Undo](evidence/released-unmatched-undo.png),
 [matched reversal](evidence/released-matched-undo.png).
+
+## Physical scanner blocked after ownership loss (TC49)
+
+Installed runtime `9cb2681`, same QA session. Before physical attempts:
+55 journal events, Unmatched (3), OMS quantities 13/13/23 for
+10001/10103/10101. Released this QA session's own lease and created a finite
+POS_QA_OTHER lease. Native ownership checks paused scanning. Aditya was asked
+to scan MSH0232Black exactly twice and confirmed done. After attempts, native
+event count stayed 55, unmatched stayed 3 and independent OMS totals stayed
+13/13/23. Rejected scans did not enter the journal. This proves rejection after
+ownership loss is detected; it does not benchmark the pre-check interval.
+The temporary QA lease was released without deleting unrelated locks.
+
+Aditya requested clearer feedback. Implementation `dbe62a2` replaces the
+old ownership section with a critical banner: Scans are not being recorded;
+This session is locked on another terminal. It hides historical ScanFeedback
+while blocked and uses a critical foreign-lock badge. No append/lease/storage
+logic changed. Eight scan-access tests, typecheck, build (64,982 gzip bytes)
+and Shopify Toolkit POS 2026-07 validation passed. Demo release
+`count-lock-banner-2026-10-04-r2`, version `1154624028673`, is active.
+The released artifact contains the new banner. Native verification remains
+pending: normal restart still loaded the preceding 9cb2681 worker body.
+The development preview and tunnel have now been stopped completely.
+Shopify Store data Refresh, a normal POS restart and recreating only the
+permanent home tile did not change the runtime worker hash
+`0a0b6ef4770b62b7966003a52a3f2e111593fed35979c4085dd04ee7bfce062e`.
+The tile is restored. The cause of the stale native bundle is unproven;
+no POS data was cleared and no reinstall or reset was performed.
