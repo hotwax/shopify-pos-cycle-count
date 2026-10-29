@@ -2,7 +2,7 @@ import {useEffect,useMemo,useRef,useState} from 'preact/hooks';
 import {countStatus,countTypeName,workStatus} from './count-api';
 import {ProductList,CompactPager} from './ProductList.jsx';
 import {ActionRow,BackButton,amount} from './FlowParts.jsx';
-import {recoverSubmission,countSubmitted,directSession} from './count-submission';
+import {recoverSubmission,countSubmitted,countEntry} from './count-submission';
 import {controlFor} from './count-control';
 const operationId=()=>Array.from({length:15},()=>Math.floor(Math.random()*16).toString(16)).join('');
 const sameProducts=(a,b)=>[...a].sort().join(',')===[...b].sort().join(',');
@@ -36,6 +36,7 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
     setProgressBusy(true);setProgressError('');
     try {
       const result=await request('progress',{workEffortId});
+      if(!active.current||sequence!==progressRequest.current)return;
       progressCache.delete(cacheKey);progressCache.set(cacheKey,result);
       while(progressCache.size>10)progressCache.delete(progressCache.keys().next().value);
       if(active.current&&sequence===progressRequest.current){setInfo(result);setProgress(result);}
@@ -60,11 +61,13 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
     run(async()=>{await refresh();const pending=await loadDecision();if(pending&&active.current){setSelected(new Set(pending.productIds));setDecision(pending.action);setSavedDecision(true);setView('confirm');}});
     return()=>{active.current=false;progressRequest.current++;};
   },[workEffortId]);
-  const lockIds=info?.statusId==='CYCLE_CNT_IN_PRGS'?info.sessions.slice(sessionPage*20,(sessionPage+1)*20).filter(session=>['SESSION_CREATED','SESSION_ASSIGNED'].includes(session.statusId)).map(session=>session.sessionId).join(','):'';
+  const availableSessions=info?.sessions.filter(session=>['SESSION_CREATED','SESSION_ASSIGNED'].includes(session.statusId))||[];
+  const visibleSessions=view==='sessions'?availableSessions:info?.sessions||[];
+  const lockIds=info?.statusId==='CYCLE_CNT_IN_PRGS'?visibleSessions.slice(sessionPage*20,(sessionPage+1)*20).filter(session=>['SESSION_CREATED','SESSION_ASSIGNED'].includes(session.statusId)).map(session=>session.sessionId).join(','):'';
   useEffect(()=>{
     let stopped=false,timer=0;
     setLocks({});setLockError('');
-    if(view!=='summary'||!lockIds)return;
+    if(!['summary','sessions'].includes(view)||!lockIds)return;
     async function refreshLocks(){
       try {
         const result=await request('sessionLocks',{workEffortId,sessionIds:lockIds.split(',')});
@@ -81,7 +84,7 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
     if(lock.available||lock.owned||(lock.expiresAt!=null&&lock.expiresAt<=Date.now()))return {};
     return {notice:`Open on another register · ${lock.operator||'another user'}`,noticeTone:lock.owned?'success':'critical'};
   }
-  const heading=({summary:info?.name||'Count summary',create:'Start a new session',product:product?.title||product?.sku||'Product details',editContribution:'Session contribution',zero:'Mark as out of stock',extras:'Extra products',confirm:decision==='completeCount'?'Send count for approval':'Review selected products'})[view];
+  const heading=({summary:info?.name||'Count summary',sessions:'Choose session',create:'Start a new session',product:product?.title||product?.sku||'Product details',editContribution:'Session contribution',zero:'Mark as out of stock',extras:'Extra products',confirm:decision==='completeCount'?'Send count for approval':'Review selected products'})[view];
   useEffect(()=>{setHeader?.({heading,subheading:view==='summary'?'':info?.name||''});},[heading,view,info?.name,setHeader]);
   async function showCreate() {
     // An unfinished earlier attempt is offered for retry with its own name and location.
@@ -150,8 +153,20 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
     await run(async()=>{const result=await request('contributions',{workEffortId,productId:item.productId});if(active.current)setContributions(result.items);});
   }
   function toggle(item) {setSelected(old=>{const next=new Set(old);if(next.has(item.productId))next.delete(item.productId);else next.add(item.productId);return next;});}
-  const resume=info&&directSession(info);
-  async function startCounting(){const started=await request('startCount',{workEffortId});setInfo(started);const session=directSession(started);if(session)await openSession(session.sessionId,undefined,session.name);else await refresh();}
+  const entry=info&&countEntry(info);
+  async function enterCounting(next=info){
+    const destination=countEntry(next);
+    if(destination.session)await openSession(destination.session.sessionId,undefined,destination.session.name);
+    else if(destination.view==='create')await showCreate();
+    else {setSessionPage(0);setView(destination.view);}
+  }
+  async function startCounting(){
+    // A pre-start product read must not overwrite the freshly started overview.
+    progressRequest.current++;setProgressBusy(false);
+    const started=await request('startCount',{workEffortId});
+    if(!active.current)return;
+    setInfo(started);await enterCounting(started);
+  }
   const canManage=info?.canComplete&&info.statusId==='CYCLE_CNT_IN_PRGS';
   const hasStarted=info&&info.statusId!=='CYCLE_CNT_CREATED';
   const canEditContribution=canManage&&contribution?.editable;
@@ -161,9 +176,9 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
   const summaryItems=useMemo(()=>progress?.items.filter(item=>item.decision!=='SKIPPED')||[],[progress]);
   const countedProducts=summaryItems.filter(item=>item.quantity!=null).length;
   const countingSessions=info?.sessions.filter(session=>['SESSION_CREATED','SESSION_ASSIGNED'].includes(session.statusId)).length||0;
-  const returnTo=()=>{setError('');setView(view==='editContribution'?'product':view==='confirm'&&decision!=='completeCount'?(decision==='confirmZero'?'zero':'extras'):'summary');};
+  const returnTo=()=>{setError('');setView(view==='editContribution'?'product':view==='confirm'&&decision!=='completeCount'?(decision==='confirmZero'?'zero':'extras'):'summary');if(['sessions','create'].includes(view))run(()=>refresh());};
   const backLabel=view==='summary'?'All counts':view==='editContribution'?'Product details':view==='confirm'&&decision!=='completeCount'?(decision==='confirmZero'?'Uncounted products':'Extra products'):'Count summary';
-  return <s-scroll-box key={`${workEffortId}:${view}`}><s-box padding="large"><s-stack direction="block" gap="large">
+  return <s-scroll-box key={`${workEffortId}:${view}:${info?.statusId||'loading'}`}><s-box padding="large"><s-stack direction="block" gap="large">
     <BackButton loading={busy} disabled={busy} onClick={view==='summary'?back:returnTo}>{backLabel}</BackButton>
     {error&&<s-banner tone="critical" heading={error}/>}{decisionProgress&&<s-text>{decisionProgress}</s-text>}
     {!info&&error&&<s-button variant="primary" onClick={()=>run(()=>refresh())}>Try again</s-button>}
@@ -173,7 +188,7 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
         <s-text color="subdued">{countTypeName(info.type)} · {workStatus(info.statusId)}</s-text>
         {(info.startDate||info.dueDate)&&<s-text color="subdued">{[info.startDate&&`Starts ${new Date(Number(info.startDate)).toLocaleDateString()}`,info.dueDate&&`Due ${new Date(Number(info.dueDate)).toLocaleDateString()}`].filter(Boolean).join(' · ')}</s-text>}
         {info.canStart&&<s-button variant="primary" disabled={busy} onClick={()=>run(startCounting)}>Start counting</s-button>}
-        {!info.canStart&&resume&&<s-button variant="primary" disabled={busy} onClick={()=>openSession(resume.sessionId,undefined,resume.name)}>Resume counting</s-button>}
+        {!info.canStart&&entry.view!=='summary'&&<s-button variant="primary" disabled={busy} onClick={()=>run(()=>enterCounting())}>{entry.view==='session'?'Resume counting':entry.view==='sessions'?'Choose session':'Start a session'}</s-button>}
       </s-stack>
       {info.canPreview&&<s-section heading="Progress"><s-box slot="secondary-actions" inlineSize="24px" blockSize="24px">{progressBusy&&<s-spinner accessibilityLabel="Updating count progress"/>}</s-box><s-stack direction="block" gap="base">
         <s-stack direction="inline" gap="large" justifyContent="start">
@@ -219,6 +234,18 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
         </s-stack>:<s-text color="subdued">Product preview is available when the count starts and your account has access.</s-text>}
       </s-section>
     </>}
+    {info&&view==='sessions'&&<s-stack direction="block" gap="base">
+      {availableSessions.slice(sessionPage*20,(sessionPage+1)*20).map((session,index)=><s-stack key={session.sessionId} direction="block" gap="none">
+        {index>0&&<s-divider/>}
+        <ActionRow title={session.name||session.sessionId}
+          detail={`${info.areas.find(a=>a.id===session.area)?.name||session.area} · ${session.mine?'You':session.operator}`}
+          {...lockStatus(session.sessionId)} meta={countStatus(session)} disabled={busy} onClick={()=>openSession(session.sessionId,undefined,session.name)}/>
+      </s-stack>)}
+      <CompactPager page={sessionPage} pages={Math.max(1,Math.ceil(availableSessions.length/20))} total={availableSessions.length} label="sessions" onPage={setSessionPage} disabled={busy}/>
+      {lockError&&<s-text tone="critical">{lockError}</s-text>}
+      {!availableSessions.length&&<s-text>No open sessions.</s-text>}
+      {info.canCreateSession&&<s-button disabled={busy} onClick={()=>run(showCreate)}>Add a session</s-button>}
+    </s-stack>}
     {info&&view==='create'&&<>
       <s-section><s-stack direction="block" gap="base">
         <s-text>Use a separate session for each person or area.</s-text>

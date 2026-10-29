@@ -33,3 +33,13 @@ export function directSession(info) {
   const sessions=info.sessions.filter(s=>s.mine&&['SESSION_CREATED','SESSION_ASSIGNED'].includes(s.statusId));
   return sessions.length===1?sessions[0]:null;
 }
+
+// Starting must always land on a counting action, never a summary with a
+// session choice hidden among products. Imported sessions still need a picker.
+export function countEntry(info) {
+  if(info.statusId!=='CYCLE_CNT_IN_PRGS')return {view:'summary'};
+  const session=directSession(info);
+  if(session)return {view:'session',session};
+  if(info.sessions.some(s=>['SESSION_CREATED','SESSION_ASSIGNED'].includes(s.statusId)))return {view:'sessions'};
+  return {view:info.canCreateSession?'create':'summary'};
+}

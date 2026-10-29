@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {recoverSubmission,sessionSubmitted,countSubmitted,directSession} from '../extensions/hotwax-cycle-count/src/count-submission.js';
+import {recoverSubmission,sessionSubmitted,countSubmitted,directSession,countEntry} from '../extensions/hotwax-cycle-count/src/count-submission.js';
 const open={statusId:'SESSION_ASSIGNED'},submitted={statusId:'SESSION_SUBMITTED'};
 
 test('lost submission response is reconciled without replaying its write',async()=>{
@@ -43,6 +43,22 @@ test('direct entry only chooses one open session owned by this operator',()=>{
   assert.equal(directSession({sessions:[mine,other]}),mine);
   assert.equal(directSession({sessions:[mine,{...mine,sessionId:'second'}]}),null);
   assert.equal(directSession({sessions:[other,{...mine,statusId:'SESSION_SUBMITTED'}]}),null);
+});
+
+test('started imported counts lead to a session picker without relying on summary position',()=>{
+  const seed={sessionId:'imported',mine:false,statusId:'SESSION_CREATED'};
+  const info={statusId:'CYCLE_CNT_IN_PRGS',canCreateSession:true,sessions:[seed]};
+  assert.deepEqual(countEntry(info),{view:'sessions'});
+  const own={...seed,mine:true};
+  assert.deepEqual(countEntry({...info,sessions:[own]}),{view:'session',session:own});
+  assert.deepEqual(countEntry({...info,sessions:[own,{...own,sessionId:'second'}]}),{view:'sessions'});
+  assert.deepEqual(countEntry({...info,sessions:[]}),{view:'create'});
+  assert.deepEqual(countEntry({...info,sessions:[{...own,statusId:'SESSION_SUBMITTED'}]}),{view:'create'});
+});
+
+test('scheduled and finished counts never expose a counting entry even with an owned session',()=>{
+  for(const statusId of ['CYCLE_CNT_CREATED','CYCLE_CNT_CMPLTD','CYCLE_CNT_CLOSED','CYCLE_CNT_CNCL'])
+    assert.deepEqual(countEntry({statusId,canCreateSession:false,sessions:[{sessionId:'mine',mine:true,statusId:'SESSION_CREATED'}]}),{view:'summary'});
 });
 
 test('confirmed submission keeps local quantities and journal when persisting read-only status',async()=>{
