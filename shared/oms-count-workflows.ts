@@ -50,6 +50,40 @@ async function reviewRows(id: string, oms: OmsConnection) {
   }
   throw new OmsLookupError('Count progress could not be fully loaded.');
 }
+// Ionic recomputes a product's total from /count session contributions after an
+// edit. Use those totals on every POS review: /reviews also joins prices and
+// stores before SUM(quantity), which can multiply a saved quantity.
+export async function countContributions(id: string, oms: OmsConnection) {
+  const result: OmsRow[] = [];
+  for (let index = 0; index <= 10000; index++) {
+    const found = await oms.get(`${workPath(id)}/count?${new URLSearchParams({pageSize:'500',pageIndex:String(index),orderByField:'productId,inventoryCountImportId'})}`);
+    if (!Array.isArray(found) || rows(found).length !== found.length) throw new OmsLookupError('Session totals could not be loaded. Refresh the count.');
+    result.push(...rows(found));
+    if (found.length < 500) return result;
+  }
+  throw new OmsLookupError('Session totals could not be fully loaded.');
+}
+export function reconcileReviewTotals(reviewed: OmsRow[], contributions: OmsRow[]) {
+  const combined = new Map<string,OmsRow & {quantity:number|null;numberOfSessions:number}>(reviewed.map(row => [text(row.productId), {...row,quantity:null,numberOfSessions:0}]));
+  const seen = new Set<string>();
+  for (const row of contributions) {
+    if (text(row.statusId) === 'SESSION_VOIDED') continue;
+    const productId=text(row.productId), sessionId=text(row.inventoryCountImportId), key=JSON.stringify([sessionId,productId]);
+    const item=combined.get(productId), quantity=number(row.counted);
+    // A partial/moving page must never become a plausible total or silently
+    // count the same session twice. Keep completion unavailable until refreshed.
+    if (!item || !productId || !sessionId || seen.has(key) || (row.counted != null && quantity === null))
+      throw new OmsLookupError('Session totals changed or are incomplete. Refresh the count.');
+    seen.add(key);
+    if (quantity !== null) item.quantity=(item.quantity ?? 0)+quantity;
+    item.numberOfSessions++;
+    item.maxLastUpdatedAt=Math.max(Number(item.maxLastUpdatedAt||0),Number(row.lastUpdatedAt||0));
+  }
+  if (reviewed.some(row=>!combined.get(text(row.productId))?.numberOfSessions ||
+      (number(row.numberOfSessions)!==null && Number(row.numberOfSessions)!==combined.get(text(row.productId))!.numberOfSessions)))
+    throw new OmsLookupError('Session totals changed or are incomplete. Refresh the count.');
+  return combined;
+}
 const FACILITY_PAGE = 500, FACILITY_WINDOW = 4;
 export async function facilityProducts(ctx: Pick<Context,'facilityId'>, oms: OmsConnection) {
   const found = new Map<string, OmsRow>();
@@ -73,8 +107,8 @@ export async function facilityProducts(ctx: Pick<Context,'facilityId'>, oms: Oms
 }
 export async function countProgress(id: string, ctx: Context, oms: OmsConnection, hydrate = true) {
   const work=await countWork(id,ctx,oms);requirePreview(work,ctx);
-  const [info, reviewed] = await Promise.all([overview(id, ctx, oms), reviewRows(id, oms)]);
-  const combined = new Map(reviewed.map(row => [text(row.productId), row]));
+  const [info, reviewed, contributions] = await Promise.all([overview(id, ctx, oms), reviewRows(id, oms), countContributions(id, oms)]);
+  const combined: Map<string,OmsRow> = reconcileReviewTotals(reviewed, contributions);
   if (info.type === 'HARD_COUNT') for (const [productId, item] of await facilityProducts(ctx, oms)) {
     if (!combined.has(productId)) combined.set(productId, {productId,quantity:null,isRequested:'Y',quantityOnHand:item.quantityOnHandTotal});
   }
