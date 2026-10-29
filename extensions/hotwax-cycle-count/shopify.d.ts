@@ -235,6 +235,14 @@ declare module './src/ProductRow.jsx' {
 }
 
 //@ts-ignore
+declare module './src/InlineQuantity.jsx' {
+  const shopify:
+    | import('@shopify/ui-extensions/pos.home.modal.render').Api
+    | import('@shopify/ui-extensions/pos.product-details.action.render').Api;
+  const globalThis: { shopify: typeof shopify };
+}
+
+//@ts-ignore
 declare module './src/HandQuantityRow.jsx' {
   const shopify:
     | import('@shopify/ui-extensions/pos.home.modal.render').Api

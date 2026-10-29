@@ -213,6 +213,13 @@ export function CountWorkspace({owner,setHeader}) {
       return id;
     }catch(failure){if(own())setError(message(failure));}
   },[]);
+  const changeQuantity=useCallback(async(item,change)=>{
+    const state=engine.current;
+    const id=await enqueue({productId:item.productId,code:item.productIdentifier||item.sku||item.productId,source:'correction',...change});
+    if(!id)return null;
+    try {await state.aggregate();return state.items.items[item.productId]?.quantity;}
+    catch(failure){if(own())setError(message(failure));return null;}
+  },[]);
   function showRecordedScans() {
     setScanSearch('');setScanPage(0);setScanFilter('all');setSessionTab('scans');
   }
@@ -499,8 +506,8 @@ export function CountWorkspace({owner,setHeader}) {
             {scanHistory?.items.map(event=><ScanEventRow key={event.id} event={event} disabled={busy||!canCount} onMatch={event=>{setIssueId(event.id);go('issue');}} onUndo={event=>run(async()=>{if(event.aggApplied===0)await engine.current.discardUnmatched(event.id);else await engine.current.undoScan(event.id);})}/>)}
             {!scanHistory?.total&&<s-text>No scan events match this view.</s-text>}
             {scanHistory&&<CompactPager {...scanHistory} label="events" disabled={busy} onPage={setScanPage}/>}
-          </s-stack>:<ProductList key={id} items={count.items} filters={false} listIndex={services.current.listIndex} disabled={busy} memory={listMemory.current} activeView={id} showTabs={false} countExtras onSelect={selectProduct}
-            search={searchMembers} onVisible={hydrateRows}/>)}
+          </s-stack>:<ProductList key={id} items={count.items} filters={false} listIndex={services.current.listIndex} memory={listMemory.current} activeView={id} showTabs={false} countExtras onSelect={selectProduct}
+            onQuantity={count.editable?changeQuantity:undefined} disabled={busy||(count.editable&&!canCount)} search={searchMembers} onVisible={hydrateRows}/>)}
         </s-tab-panel>)}
       </s-tabs>}
     </s-stack></s-box></s-scroll-box>
