@@ -101,7 +101,7 @@ export class OmsConnection {
       }
       const budget = this.started + 48000 - this.clock();
       // The legacy session-item endpoint aggregates inventory as well as count
-      // rows. Live UAT reads take ~18 s; keep a bounded allowance for that API.
+      // rows. Reads are facility-scoped; retain a bounded allowance for slow instances.
       const sessionItems = !mutation && /^\/rest\/s1\/inventory-cycle-count\/cycleCounts\/sessions\/[^/]+\/items\?/.test(path);
       const signals = [AbortSignal.timeout(Math.max(1, Math.min(mutation || sessionItems ? 25000 : 12000, mutation ? budget : remaining)))];
       if (!this.writeStarted && this.identity.signal) signals.push(this.identity.signal);

@@ -110,13 +110,13 @@ async function createSession(id: string, payload: OmsRow, ctx: Context, oms: Oms
   const source = sessions.find(s=>text(s.inventoryCountImportId)!==sessionId && text(s.statusId)!=='SESSION_VOIDED');
   if (directed && !source) throw new OmsLookupError('This directed count has no requested product list. Add its scope in HotWax first.');
   const requested: OmsRow[]=[];
-  if(directed)for(const seed of sessions.filter(s=>text(s.inventoryCountImportId)!==sessionId&&text(s.statusId)!=='SESSION_VOIDED'))requested.push(...(await sessionRows(text(seed.inventoryCountImportId),oms)).filter(row=>text(row.isRequested)!=='N'));
+  if(directed)for(const seed of sessions.filter(s=>text(s.inventoryCountImportId)!==sessionId&&text(s.statusId)!=='SESSION_VOIDED'))requested.push(...(await sessionRows(text(seed.inventoryCountImportId),ctx,oms)).filter(row=>text(row.isRequested)!=='N'));
   const scope = new Map(requested.map(row=>[text(row.productId),row]));
   if (directed && !scope.size) throw new OmsLookupError('The directed product list is empty. Check its scope in HotWax.');
   if (!existing) await oms.mutate(`${workPath(id)}/sessions`, {inventoryCountImportId:sessionId,workEffortId:id,countImportName:name,
     statusId:'SESSION_CREATED',uploadedByUserLogin:ctx.username,createdDate:Date.now(),facilityAreaId:payload.area});
   if (directed) {
-    const present = new Set((await sessionRows(sessionId,oms)).map(row=>text(row.productId)));
+    const present = new Set((await sessionRows(sessionId,ctx,oms)).map(row=>text(row.productId)));
     const missing = [...scope].filter(([productId])=>!present.has(productId));
     // At most 1,000 seeds per request keeps work within the native operation deadline.
     for (let offset=0;offset<Math.min(missing.length,1000);offset+=250) await oms.mutate(`${resource(sessionId)}/items`, {items:missing.slice(offset,offset+250).map(([productId,row])=>({
@@ -177,12 +177,12 @@ export async function handleWorkflow(identity: CountIdentity, payload: OmsRow, c
     const edit=async()=>{
       const latest=await ownedCount(sessionId,ctx,oms,true);
       if(!['SESSION_CREATED','SESSION_ASSIGNED','SESSION_SUBMITTED'].includes(text(latest.session.statusId)))throw new OmsLookupError('This session is no longer editable.',409);
-      const records=await sessionRows(sessionId,oms,productId);
+      const records=await sessionRows(sessionId,ctx,oms,productId);
       const current=records.some(r=>number(r.quantity)!==null)?records.reduce((sum,r)=>sum+(number(r.quantity)||0),0):null;
       if(!records.length||(current!==number(payload.expectedQuantity)&&current!==quantity))throw new OmsLookupError('This contribution changed. Refresh the team total before editing.',409);
       if(records.some(r=>!r.uuid))throw new OmsLookupError('This session has legacy rows without unique IDs. Reopen it in HotWax before editing.',409);
       await oms.mutate(`${resource(sessionId)}/items`,{items:records.map((r,i)=>({uuid:r.uuid,productId,quantity:i===0?quantity:0,countedByUserLoginId:ctx.username}))},'PUT');
-      const saved=await sessionRows(sessionId,oms,productId);
+      const saved=await sessionRows(sessionId,ctx,oms,productId);
       if(saved.reduce((sum,r)=>sum+(number(r.quantity)||0),0)!==quantity)throw new OmsLookupError('HotWax did not confirm the updated contribution. Refresh before retrying.',409);
       return {saved:true};
     };
@@ -228,7 +228,7 @@ export async function handleWorkflow(identity: CountIdentity, payload: OmsRow, c
     // product counted meanwhile by another operator.
     const prior=await countSessions(id,oms), existing=prior.find(s=>text(s.inventoryCountImportId)===sessionId);
     if(existing && text(existing.uploadedByUserLogin)!==ctx.username) throw new OmsLookupError('Zero confirmation identity conflict.',409);
-    const already=existing ? await sessionRows(sessionId,oms) : [];
+    const already=existing ? await sessionRows(sessionId,ctx,oms) : [];
     if(items.some(i=>!i!.isRequested || (i!.quantity!==null && !(i!.quantity===0 && already.some(row=>text(row.productId)===i!.productId)))))
       throw new OmsLookupError('A selected product has already been counted. Refresh progress.',409);
     if(!existing) await oms.mutate(`${workPath(id)}/sessions`,{inventoryCountImportId:sessionId,workEffortId:id,countImportName:'Confirmed zero in POS',statusId:'SESSION_SUBMITTED',uploadedByUserLogin:ctx.username,createdDate:Date.now(),facilityAreaId:'register'});

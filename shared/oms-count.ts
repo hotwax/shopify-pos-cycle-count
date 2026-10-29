@@ -137,12 +137,14 @@ export async function ownedCount(id: string, ctx: Context, oms: OmsConnection, w
     throw new OmsLookupError("This count is no longer open for changes.",409);
   return {session, work};
 }
-// The inventory view can repeat a count item for different inventory facilities.
-// Deduplicate on the real item PK, never by product (one product may have several rows).
-export async function sessionRows(id: string, oms: OmsConnection, productIds?: string) {
+// Match Ionic's store-scoped read: the legacy view pushes facilityId into its
+// inventory aggregate, avoiding a scan of inventory across every facility.
+// Keep rows with no inventory match and deduplicate only by the real item PK.
+export async function sessionRows(id: string, ctx: Pick<Context,'facilityId'>, oms: OmsConnection, productIds?: string) {
+  if (!ctx.facilityId) throw new OmsLookupError('The POS store is not mapped to a HotWax facility.', 403);
   const unique = new Map<string, OmsRow>();
   for (let pageIndex = 0; true; pageIndex++) {
-    const found = rows(await oms.get(`${resource(id)}/items?${new URLSearchParams({pageSize: "5000", pageIndex: String(pageIndex), orderByField: "importItemSeqId,facilityId", ...(productIds ? {productId: productIds, productId_op: "in"} : {})})}`));
+    const found = rows(await oms.get(`${resource(id)}/items?${new URLSearchParams({facilityId: ctx.facilityId, pageSize: "5000", pageIndex: String(pageIndex), orderByField: "importItemSeqId,facilityId", ...(productIds ? {productId: productIds, productId_op: "in"} : {})})}`));
     for (const item of found) unique.set(text(item.importItemSeqId), item);
     if (found.length < 5000) return [...unique.values()];
   }
@@ -195,7 +197,7 @@ export function requirePreview(work: OmsRow, ctx: Context) {
 export async function countDetail(id: string, ctx: Context, oms: OmsConnection) {
   const {session, work} = await ownedCount(id, ctx, oms);
   requirePreview(work,ctx);
-  const imports = await sessionRows(id, oms);
+  const imports = await sessionRows(id, ctx, oms);
   const grouped = new Map<string, OmsRow[]>();
   for (const row of imports) {const key = text(row.productId); if (key) grouped.set(key, [...(grouped.get(key) || []), row]);}
   const {details, balances} = await productDetails([...grouped.keys()], ctx, oms);
@@ -313,7 +315,7 @@ export async function handleCount(
     const editable = EDITABLE.has(statusId) && countStatusId === "CYCLE_CNT_IN_PRGS";
     const quantities: Record<string, number> = {};
     if (!editable && ["SESSION_SUBMITTED", "SESSION_APPROVED"].includes(statusId))
-      for (const row of await sessionRows(sessionId, oms)) {
+      for (const row of await sessionRows(sessionId, ctx, oms)) {
         const productId = text(row.productId), quantity = number(row.quantity);
         if (productId && quantity !== null) quantities[productId] = (quantities[productId] ?? 0) + quantity;
       }
@@ -387,7 +389,7 @@ export async function handleCount(
       const [countedRows, balanceRows, existingRows] = await Promise.all([
         oms.get(countPath),
         oms.get(`/rest/s1/oms/productFacilities/inventory?${new URLSearchParams({facilityId: ctx.facilityId, productId: productIds, productId_op: "in", pageSize: "100"})}`),
-        sessionRows(sessionId, oms, productIds),
+        sessionRows(sessionId, ctx, oms, productIds),
       ]);
       const counted = rows(countedRows);
       for (const item of batch) {
