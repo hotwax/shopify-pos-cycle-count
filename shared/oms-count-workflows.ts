@@ -129,6 +129,10 @@ async function createSession(id: string, payload: OmsRow, ctx: Context, oms: Oms
 
 export async function handleWorkflow(identity: CountIdentity, payload: OmsRow, ctx: Context, oms: OmsConnection): Promise<unknown> {
   const action=text(payload.action), id=text(payload.workEffortId);
+  if(action==='countSubmissionStatus'){
+    const work=await countWork(id,ctx,oms);requirePreview(work,ctx);
+    return {workEffortId:id,statusId:text(work.statusId)};
+  }
   if (action==='storeCounts') {
     const pageIndex=page(payload.pageIndex), group=text(payload.group)||'active';
     const statusId = {active:'CYCLE_CNT_CREATED,CYCLE_CNT_IN_PRGS',submitted:'CYCLE_CNT_CMPLTD',history:'CYCLE_CNT_CLOSED,CYCLE_CNT_CNCL'}[group];

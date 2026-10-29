@@ -1,8 +1,8 @@
 import {memo} from './memo';
 import {ActionRow} from './FlowParts.jsx';
 function ProductRowContent({item,selected,disabled,onSelect}) {
-  const title=item.primary||item.title||item.sku||item.productId;
-  const detail=`${item.title||item.sku||item.productId} · ${item.secondary||item.sku||item.productId}${item.isRequested===false?' · Extra product':''}${item.decision==='SKIPPED'?' · Discarded':''}`;
+  const title=item.title||item.primary||item.sku||item.productId;
+  const detail=`${[item.primary,item.secondary||item.sku||item.productId].filter(value=>value&&value!==title).join(' · ')}${item.isRequested===false?' · Extra product':''}${item.decision==='SKIPPED'?' · Discarded':''}`;
   const quantity=item.quantity==null?'Uncounted':`${item.quantity} counted`;
   if(selected!==undefined)return <s-choice-list multiple values={selected?[item.productId]:[]} onChange={()=>onSelect?.(item)}>
     <s-choice value={item.productId} disabled={disabled||!onSelect}>

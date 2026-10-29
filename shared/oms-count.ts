@@ -312,6 +312,10 @@ export async function handleCount(
       }
     return {sessionId, statusId, countStatusId, editable, quantities};
   }
+  if(action==='submissionStatus'){
+    const {session,work}=await ownedCount(sessionId,ctx,oms);
+    return {sessionId,statusId:text(session.statusId),countStatusId:text(work.statusId)};
+  }
   if (action === "lookup" || action === "lookupBatch" || action === "lookupIdentityBatch") {
     const codes = action === "lookup" ? [text(payload.code).trim()] : Array.isArray(payload.codes) ? payload.codes.map(value => text(value).trim()) : [];
     const result = await matchCodes([...new Set(codes)], ctx.preferences, oms, action === "lookupIdentityBatch");
@@ -339,7 +343,7 @@ export async function handleCount(
     return countDetail(sessionId,ctx,oms);
   }
   const { session, work } = await ownedCount(sessionId, ctx, oms, true);
-  if (action === "submit" && text(session.statusId) === "SESSION_SUBMITTED") return countDetail(sessionId, ctx, oms);
+  if (action === "submit" && text(session.statusId) === "SESSION_SUBMITTED") return payload.compact?{sessionId,statusId:'SESSION_SUBMITTED',countStatusId:text(work.statusId)}:countDetail(sessionId, ctx, oms);
   if (
     !EDITABLE.has(text(session.statusId)) ||
     text(work.statusId) !== "CYCLE_CNT_IN_PRGS"
@@ -420,6 +424,10 @@ export async function handleCount(
         { statusId: "SESSION_SUBMITTED" },
         "PUT",
       );
+      if(payload.compact){
+        const confirmed=await ownedCount(sessionId,ctx,oms);
+        return {sessionId,statusId:text(confirmed.session.statusId),countStatusId:text(confirmed.work.statusId)};
+      }
       return countDetail(sessionId, ctx, oms);
     }, payload.lease as OmsRow|undefined, identity.deviceId);
   throw new OmsLookupError("Unknown count action.", 400);
