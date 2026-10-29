@@ -68,3 +68,17 @@ test('catalog titles put the parent product before its short variant label',asyn
   const item=presentProduct({productId:'p1',productName:'Gold',parentProductName:'Parker Necklace'}, {barcode:'UPC',primary:'SKU',secondary:'parentProductName'});
   assert.equal(item.title,'Parker Necklace · Gold');assert.equal(item.productId,'p1');
 });
+
+test('submission checks the saved session aggregate, including zero, without inventory hydration',async()=>{
+  const {hasSavedQuantity}=await import('../shared/oms-count.ts');
+  for(const counted of [3,0,null]){
+    const oms={get:async(path:string)=>{
+      const url=new URL(path,'https://example.invalid');
+      assert.equal(url.pathname,'/rest/s1/inventory-cycle-count/cycleCounts/workEfforts/work/count');
+      assert.equal(url.searchParams.get('inventoryCountImportId'),'session');
+      assert.equal(url.searchParams.get('counted_from'),'0');assert.equal(url.searchParams.get('pageSize'),'1');
+      return [{counted}];
+    }};
+    assert.equal(await hasSavedQuantity('session','work',oms as any),counted!==null);
+  }
+});

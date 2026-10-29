@@ -148,6 +148,13 @@ export async function sessionRows(id: string, oms: OmsConnection, productIds?: s
   }
   throw new OmsLookupError("Session items could not be fully loaded. Saved scans are retained.");
 }
+
+export async function hasSavedQuantity(sessionId: string, workEffortId: string, oms: OmsConnection) {
+  // The session item API joins all inventory balances. The count aggregate has
+  // the same saved quantities without that join; zero is a valid counted total.
+  const found = rows(await oms.get(`${BASE}/workEfforts/${encodeURIComponent(validId(workEffortId))}/count?${new URLSearchParams({inventoryCountImportId:validId(sessionId),counted_from:'0',pageSize:'1'})}`));
+  return found.some(row => number(row.counted) !== null && Number(row.counted) >= 0);
+}
 export async function productDetails(ids: string[], ctx: Context, oms: OmsConnection) {
   const details = new Map<string, OmsRow>(), balances = new Map<string, OmsRow>();
   // Queue every 200-product chunk at once. OmsConnection keeps at most six
@@ -417,8 +424,7 @@ export async function handleCount(
       // images or inventory enrichment. Those reads can outlast a POS request.
       const latest=await ownedCount(sessionId,ctx,oms,true);
       if(!EDITABLE.has(text(latest.session.statusId)))throw new OmsLookupError('Session status changed. Check submission again.',409);
-      const saved=await sessionRows(sessionId,oms);
-      if (!saved.some(item => number(item.quantity) !== null))
+      if (!await hasSavedQuantity(sessionId,text(latest.work.workEffortId),oms))
         throw new OmsLookupError(
           "Scan at least one product before submitting.",
           400,
