@@ -161,3 +161,20 @@ test('scan history reuses its ordered list across re-renders and page turns', as
  await e.append({code:'newest',source:'external'});
  assert.notEqual((e.historyPage('',0),e.memo.history.list),ordered);assert.equal(e.historyPage('',0).items[0].scannedValue,'newest');
 });
+
+test('inline steps resolve against saved scans and pending corrections without losing taps', async () => {
+ const f=fixture(), e=f.engine();await e.open({...count,items:[{productId:'p1',sku:'sku1',quantity:2}]});
+ await e.append({code:'sku1',productId:'p1',quantity:3,source:'external'});
+ const step=(adjustment:number)=>e.append({code:'sku1',productId:'p1',source:'correction',adjustment});
+ await Promise.all([step(1),step(1),step(-1)]);
+ await e.aggregate();assert.equal(e.items.items.p1.quantity,6);
+ await e.sync();assert.equal(f.writes.at(-1).quantity,6);
+});
+
+test('inline zero remains counted after restart and steps cannot make it negative', async () => {
+ const f=fixture(), e=f.engine();await e.open({...count,items:[{productId:'p1',sku:'sku1',quantity:null}]});
+ await e.append({code:'sku1',productId:'p1',source:'correction',quantity:0});await e.aggregate();
+ await assert.rejects(e.append({code:'sku1',productId:'p1',source:'correction',adjustment:-1}),/whole quantity/);
+ const reopened=f.engine();await reopened.open({...count,items:[{productId:'p1',sku:'sku1',quantity:null}]});
+ assert.equal(reopened.items.items.p1.quantity,0);
+});

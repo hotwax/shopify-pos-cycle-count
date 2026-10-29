@@ -137,16 +137,25 @@ export async function ownedCount(id: string, ctx: Context, oms: OmsConnection, w
     throw new OmsLookupError("This count is no longer open for changes.",409);
   return {session, work};
 }
-// The inventory view can repeat a count item for different inventory facilities.
-// Deduplicate on the real item PK, never by product (one product may have several rows).
-export async function sessionRows(id: string, oms: OmsConnection, productIds?: string) {
+// Match Ionic's store-scoped read: the legacy view pushes facilityId into its
+// inventory aggregate, avoiding a scan of inventory across every facility.
+// Keep rows with no inventory match and deduplicate only by the real item PK.
+export async function sessionRows(id: string, ctx: Pick<Context,'facilityId'>, oms: OmsConnection, productIds?: string) {
+  if (!ctx.facilityId) throw new OmsLookupError('The POS store is not mapped to a HotWax facility.', 403);
   const unique = new Map<string, OmsRow>();
   for (let pageIndex = 0; true; pageIndex++) {
-    const found = rows(await oms.get(`${resource(id)}/items?${new URLSearchParams({pageSize: "5000", pageIndex: String(pageIndex), orderByField: "importItemSeqId,facilityId", ...(productIds ? {productId: productIds, productId_op: "in"} : {})})}`));
+    const found = rows(await oms.get(`${resource(id)}/items?${new URLSearchParams({facilityId: ctx.facilityId, pageSize: "5000", pageIndex: String(pageIndex), orderByField: "importItemSeqId,facilityId", ...(productIds ? {productId: productIds, productId_op: "in"} : {})})}`));
     for (const item of found) unique.set(text(item.importItemSeqId), item);
     if (found.length < 5000) return [...unique.values()];
   }
   throw new OmsLookupError("Session items could not be fully loaded. Saved scans are retained.");
+}
+
+export async function hasSavedQuantity(sessionId: string, workEffortId: string, oms: OmsConnection) {
+  // The session item API joins all inventory balances. The count aggregate has
+  // the same saved quantities without that join; zero is a valid counted total.
+  const found = rows(await oms.get(`${BASE}/workEfforts/${encodeURIComponent(validId(workEffortId))}/count?${new URLSearchParams({inventoryCountImportId:validId(sessionId),counted_from:'0',pageSize:'1'})}`));
+  return found.some(row => number(row.counted) !== null && Number(row.counted) >= 0);
 }
 export async function productDetails(ids: string[], ctx: Context, oms: OmsConnection) {
   const details = new Map<string, OmsRow>(), balances = new Map<string, OmsRow>();
@@ -188,7 +197,7 @@ export function requirePreview(work: OmsRow, ctx: Context) {
 export async function countDetail(id: string, ctx: Context, oms: OmsConnection) {
   const {session, work} = await ownedCount(id, ctx, oms);
   requirePreview(work,ctx);
-  const imports = await sessionRows(id, oms);
+  const imports = await sessionRows(id, ctx, oms);
   const grouped = new Map<string, OmsRow[]>();
   for (const row of imports) {const key = text(row.productId); if (key) grouped.set(key, [...(grouped.get(key) || []), row]);}
   const {details, balances} = await productDetails([...grouped.keys()], ctx, oms);
@@ -197,7 +206,7 @@ export async function countDetail(id: string, ctx: Context, oms: OmsConnection) 
     if (!product) throw new OmsLookupError("Count product details are incomplete. Saved quantities have been kept.");
     const quantities = entries.map(row => number(row.quantity)).filter((q): q is number => q !== null);
     const quantity = quantities.length ? quantities.reduce((a, b) => a + b, 0) : null;
-    return {...product.presentation as object, productId, title: text(product.productName || product.internalName || productId), sku: text(product.internalName), quantity,
+    return {...product.presentation as object, productId, title: text((product.presentation as OmsRow|undefined)?.title || product.productName || product.internalName || productId), sku: text(product.internalName), quantity,
       assignedAt:Number(entries[0].createdDate||0),lastUpdatedAt:Math.max(...entries.map(r=>Number(r.lastUpdatedStamp||r.createdDate||0))),
       isRequested: entries.some(row => text(row.isRequested) !== "N"),
       ...visibleCountInventory(quantity, number(balances.get(productId)?.quantityOnHand), ctx.canViewOnHand)};
@@ -306,11 +315,15 @@ export async function handleCount(
     const editable = EDITABLE.has(statusId) && countStatusId === "CYCLE_CNT_IN_PRGS";
     const quantities: Record<string, number> = {};
     if (!editable && ["SESSION_SUBMITTED", "SESSION_APPROVED"].includes(statusId))
-      for (const row of await sessionRows(sessionId, oms)) {
+      for (const row of await sessionRows(sessionId, ctx, oms)) {
         const productId = text(row.productId), quantity = number(row.quantity);
         if (productId && quantity !== null) quantities[productId] = (quantities[productId] ?? 0) + quantity;
       }
     return {sessionId, statusId, countStatusId, editable, quantities};
+  }
+  if(action==='submissionStatus'){
+    const {session,work}=await ownedCount(sessionId,ctx,oms);
+    return {sessionId,statusId:text(session.statusId),countStatusId:text(work.statusId)};
   }
   if (action === "lookup" || action === "lookupBatch" || action === "lookupIdentityBatch") {
     const codes = action === "lookup" ? [text(payload.code).trim()] : Array.isArray(payload.codes) ? payload.codes.map(value => text(value).trim()) : [];
@@ -339,7 +352,7 @@ export async function handleCount(
     return countDetail(sessionId,ctx,oms);
   }
   const { session, work } = await ownedCount(sessionId, ctx, oms, true);
-  if (action === "submit" && text(session.statusId) === "SESSION_SUBMITTED") return countDetail(sessionId, ctx, oms);
+  if (action === "submit" && text(session.statusId) === "SESSION_SUBMITTED") return payload.compact?{sessionId,statusId:'SESSION_SUBMITTED',countStatusId:text(work.statusId)}:countDetail(sessionId, ctx, oms);
   if (
     !EDITABLE.has(text(session.statusId)) ||
     text(work.statusId) !== "CYCLE_CNT_IN_PRGS"
@@ -376,7 +389,7 @@ export async function handleCount(
       const [countedRows, balanceRows, existingRows] = await Promise.all([
         oms.get(countPath),
         oms.get(`/rest/s1/oms/productFacilities/inventory?${new URLSearchParams({facilityId: ctx.facilityId, productId: productIds, productId_op: "in", pageSize: "100"})}`),
-        sessionRows(sessionId, oms, productIds),
+        sessionRows(sessionId, ctx, oms, productIds),
       ]);
       const counted = rows(countedRows);
       for (const item of batch) {
@@ -409,8 +422,11 @@ export async function handleCount(
   }
   if (action === "submit")
     return withCountLock(sessionId, ctx, oms, async () => {
-      const detail = await countDetail(sessionId, ctx, oms);
-      if (!detail.items.some(item => item.quantity !== null))
+      // Submission needs fresh status and saved quantities, not product names,
+      // images or inventory enrichment. Those reads can outlast a POS request.
+      const latest=await ownedCount(sessionId,ctx,oms,true);
+      if(!EDITABLE.has(text(latest.session.statusId)))throw new OmsLookupError('Session status changed. Check submission again.',409);
+      if (!await hasSavedQuantity(sessionId,text(latest.work.workEffortId),oms))
         throw new OmsLookupError(
           "Scan at least one product before submitting.",
           400,
@@ -420,6 +436,10 @@ export async function handleCount(
         { statusId: "SESSION_SUBMITTED" },
         "PUT",
       );
+      if(payload.compact){
+        const confirmed=await ownedCount(sessionId,ctx,oms);
+        return {sessionId,statusId:text(confirmed.session.statusId),countStatusId:text(confirmed.work.statusId)};
+      }
       return countDetail(sessionId, ctx, oms);
     }, payload.lease as OmsRow|undefined, identity.deviceId);
   throw new OmsLookupError("Unknown count action.", 400);

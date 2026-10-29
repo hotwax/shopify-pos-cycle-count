@@ -69,7 +69,12 @@ export async function fetchVariantDisplays(api: ProductSearchApiContent | undefi
   const found=new Map<number,{title:string;sku:string;imageUrl:string}>();
   if(!api||!ids.length)return found;
   const result=await api.fetchProductVariantsWithIds(ids.slice(0,50));
-  for(const variant of result.fetchedResources||[])found.set(variant.id,variantDisplay(variant as Variant));
+  const variants=(result.fetchedResources||[]) as Variant[];
+  const parentIds=[...new Set(variants.filter(v=>!v.product?.title&&v.productId).map(v=>v.productId!))];
+  // Bulk variant responses may contain only a variant label such as “A”. Fetch
+  // parent names as display-only enrichment; never change the count identity.
+  const parents=parentIds.length?new Map((await api.fetchProductsWithIds(parentIds)).fetchedResources.map(p=>[p.id,p])):new Map();
+  for(const variant of variants)found.set(variant.id,variantDisplay(variant,parents.get(variant.productId)));
   return found;
 }
 type Member={productId:string;variantId?:number};

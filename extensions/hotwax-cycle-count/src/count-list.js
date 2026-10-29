@@ -25,11 +25,11 @@ export class CountListIndex {
     }
   }
   /** Product IDs in the view whose indexed text matches, in assigned order. */
-  list(search = '', view = 'all') {
-    const query = search.trim().toLowerCase(), key = `${view}:${query}`;
+  list(search = '', view = 'all', editingId = '') {
+    const query = search.trim().toLowerCase(), key = `${view}:${query}:${editingId}`;
     if (!this.queries.has(key)) {
       if (this.queries.size > 8) this.queries.clear();
-      this.queries.set(key, this.ids.filter(id => {const record = this.records.get(id); return matchesView(record.item,view) && record.search.includes(query);}));
+      this.queries.set(key, this.ids.filter(id => {const record = this.records.get(id); return (matchesView(record.item,view)||(view==='uncounted'&&id===editingId&&record.item.isRequested!==false)) && record.search.includes(query);}));
     }
     return this.queries.get(key);
   }
@@ -43,7 +43,7 @@ export class CountListIndex {
     if (sort === 'assigned') return ids;
     return ids.filter(id => this.records.has(id)).sort((a,b)=>{const left=this.records.get(a).item,right=this.records.get(b).item;return sort==='alphabetic'?String(left.primary||left.title||left.sku||a).localeCompare(String(right.primary||right.title||right.sku||b))||a.localeCompare(b):(right.lastUpdatedAt||0)-(left.lastUpdatedAt||0)||a.localeCompare(b);});
   }
-  page(search = '', view = 'all', page = 0, sort = 'assigned') {return this.slice(this.sort(this.list(search, view), sort), page);}
+  page(search = '', view = 'all', page = 0, sort = 'assigned', editingId = '') {return this.slice(this.sort(this.list(search, view, editingId), sort), page);}
   slice(ids, page = 0) {
     const pages = Math.max(1,Math.ceil(ids.length / PRODUCT_PAGE_SIZE));
     const current = Math.min(Math.max(0,page),pages-1);

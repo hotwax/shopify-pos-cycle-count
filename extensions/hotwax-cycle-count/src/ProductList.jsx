@@ -11,7 +11,9 @@ export function CompactPager({page,pages,total,onPage,disabled,label='products'}
     <s-button disabled={disabled||page+1>=pages} onClick={()=>onPage(page+1)}>Next</s-button>
   </s-stack>;
 }
-function ProductListContent({items,disabled=false,directed=false,onSelect,selected,initialView='all',filters=true,showTabs=true,activeView,memory,countExtras=false,renderViewActions,listIndex,search:searchShop,onVisible}) {
+function ProductListContent({items,disabled=false,directed=false,onSelect,onQuantity,selected,initialView='all',filters=true,showTabs=true,activeView,memory,countExtras=false,renderViewActions,listIndex,search:searchShop,onVisible}) {
+  // Keep the product being edited visible in Uncounted until staff move on.
+  const [editingId,setEditingId]=useState('');
   const [search,setSearch]=useState(memory?.search||''),[selectedView,setView]=useState(memory?.view||initialView),[page,setPage]=useState(memory?.page||0);
   const view=activeView??(!directed&&selectedView==='undirected'?'all':selectedView);
   const [sort,setSort]=useState(memory?.sort||'assigned');
@@ -31,7 +33,7 @@ function ProductListContent({items,disabled=false,directed=false,onSelect,select
     setRemote(old=>old?.query===query?{...old,loading:true}:{query,ids:[],complete:false,loading:true});
     // Relevance pages as needed; any other sort applies to the whole result set, so walk
     // it all. Each call walks a few seconds; keep going until this view's page is filled.
-    const needed=sort==='assigned'?(page+2)*PRODUCT_PAGE_SIZE:Infinity,inView=new Set(index.current.list('',viewKey)),wanted=id=>inView.has(id);
+    const needed=sort==='assigned'?(page+2)*PRODUCT_PAGE_SIZE:Infinity,inView=new Set(index.current.list('',viewKey,editingId)),wanted=id=>inView.has(id);
     (async()=>{
       let found;
       do found=await searchShop(query,needed,wanted);
@@ -39,16 +41,16 @@ function ProductListContent({items,disabled=false,directed=false,onSelect,select
       if(!stale)setRemote(found?{query,...found,loading:false}:null);
     })().catch(()=>{if(!stale)setRemote(old=>old&&{...old,complete:true,loading:false});});
     return()=>{stale=true;};
-  },[searchShop,query,page,sort,viewKey,items.length]);
+  },[searchShop,query,page,sort,viewKey,items.length,editingId]);
   const result=useMemo(()=>{
     const list=index.current;
     list.update(items);
-    if(!remote||remote.query!==query){const shown=list.page(search,viewKey,page,sort);return {...shown,prefetch:list.page(search,viewKey,page+1,sort).items};}
+    if(!remote||remote.query!==query){const shown=list.page(search,viewKey,page,sort,editingId);return {...shown,prefetch:list.page(search,viewKey,page+1,sort,editingId).items};}
     // Exact identifier or barcode matches first, then Shopify relevance, then other local matches.
-    const inView=new Set(list.list('',viewKey)),ordered=[...list.exact(search).filter(id=>inView.has(id)),...remote.ids.filter(id=>inView.has(id))];
-    const shown=new Set(ordered),ids=list.sort([...shown,...list.list(search,viewKey).filter(id=>!shown.has(id))],sort);
+    const inView=new Set(list.list('',viewKey,editingId)),ordered=[...list.exact(search).filter(id=>inView.has(id)),...remote.ids.filter(id=>inView.has(id))];
+    const shown=new Set(ordered),ids=list.sort([...shown,...list.list(search,viewKey,editingId).filter(id=>!shown.has(id))],sort);
     return {...list.slice(ids,page),prefetch:list.slice(ids,page+1).items};
-  },[items,search,viewKey,page,sort,remote]);
+  },[items,search,viewKey,page,sort,remote,editingId]);
   // Hydrate the rendered page plus the next one.
   useEffect(()=>{onVisible?.([...result.items,...(result.page===page?result.prefetch:[])]);},[result.items,onVisible]);
   const views=[['all','All'],['uncounted','Uncounted'],['counted','Counted'],...(directed?[['undirected','Extra']]:[])];
@@ -57,7 +59,7 @@ function ProductListContent({items,disabled=false,directed=false,onSelect,select
     {filters&&showTabs&&<s-tabs value={view} onChange={e=>{setView(e.currentTarget.value);setPage(0);}}><s-tab-list>{views.map(([id,label])=><s-tab key={id} controls={id}>{label}</s-tab>)}</s-tab-list>{views.map(([id])=><s-tab-panel key={id} id={id}/>)}</s-tabs>}
     {renderViewActions?.(view)}
     <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
-      <s-text color="subdued">{result.total}{remote&&!remote.complete?'+':''} {result.total===1?'product':'products'}{remote?.loading?' · Searching…':selected?' · Tap to select':onSelect?' · Tap for details':''}</s-text>
+      <s-text color="subdued">{result.total}{remote&&!remote.complete?'+':''} {result.total===1?'product':'products'}{remote?.loading?' · Searching…':selected?' · Tap to select':onSelect&&!onQuantity?' · Tap for details':''}</s-text>
       {filters&&<s-button disabled={disabled} command="--show" commandFor={sortId}>Sort · {sortOptions.find(([value])=>value===sort)?.[1]}</s-button>}
     </s-stack>
     {filters&&<s-modal id={sortId} heading="Sort products">
@@ -66,11 +68,11 @@ function ProductListContent({items,disabled=false,directed=false,onSelect,select
       </s-choice-list>
       <s-button slot="primary-action" command="--hide" commandFor={sortId}>Done</s-button>
     </s-modal>}
-    {!result.total&&<s-text>No products match this view.</s-text>}
+    {!result.total&&<s-text>{view==='uncounted'&&!query&&items.length?'All products counted.':query?'No matching products.':'No products in this view.'}</s-text>}
     {/* Shopify hits can reorder a page after local matches render. Key the
         bounded native row subtree by that order for both search phases. */}
-    <s-stack direction="block" gap="none" key={`${view}:${sort}:${search}:${result.items.map(item=>item.productId).join(",")}`}>
-      {result.items.map(item=><ProductRow key={item.productId} item={item} selected={selected?.has(item.productId)} disabled={disabled} onSelect={onSelect}/>)}
+    <s-stack direction="block" gap={onQuantity?'small':'none'} key={`${view}:${sort}:${search}:${onQuantity?page:result.items.map(item=>item.productId).join(",")}`}>
+      {result.items.map(item=><ProductRow key={item.productId} item={item} selected={selected?.has(item.productId)} disabled={disabled} onSelect={onSelect} onQuantity={onQuantity} onActivate={setEditingId}/>)}
     </s-stack>
     {result.total>PRODUCT_PAGE_SIZE&&<CompactPager {...result} disabled={disabled} onPage={setPage}/>}
   </s-stack>;

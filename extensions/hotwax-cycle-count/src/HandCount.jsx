@@ -54,7 +54,6 @@ export function HandCount({request,engine,storage,owner,count,done,disabled=fals
     }).catch(()=>{});
     return()=>{stale=true;};
   },[step,page,entries.length]);
-  useEffect(()=>{setHeader?.({heading:step==='review'?'Review hand count':'Hand count',subheading:count.name});},[step]);
   const change=useCallback((product,value)=>{
     if(blocked.current||!ready.current)return;
     const next=current.current.filter(entry=>entry.product.productId!==product.productId);
@@ -100,25 +99,21 @@ export function HandCount({request,engine,storage,owner,count,done,disabled=fals
   const quantities=useMemo(()=>new Map(entries.map(entry=>[entry.product.productId,entry.quantity])),[entries]);
   const batchRecorded=locked&&engine.events.events.some(event=>event.batchId===operation.current);
   const units=entries.reduce((sum,entry)=>sum+(quantityError(entry.quantity)?0:Number(entry.quantity)),0),invalid=entries.some(entry=>quantityError(entry.quantity));
-  return <s-stack direction="block" gap="large">
-    <BackButton loading={busy} disabled={busy} onClick={back}>{step==='review'&&!locked?'Hand count':'Count items'}</BackButton>
-    <s-heading>{step==='review'?'Review hand count':'Hand count'}</s-heading>
+  useEffect(()=>{setHeader?.({heading:step==='review'?'Review quantities':'Enter quantities',subheading:count.countName||count.name,action:{label:step==='review'?`Add ${amount(units,'unit')}`:`Review · ${units}`,onClick:step==='review'?save:review,disabled:busy||disabled||invalid||!entries.length,loading:busy}});},[step,entries,busy,disabled]);
+  return <s-stack direction="block" gap="base">
+    <BackButton loading={busy} disabled={busy} onClick={back}>{step==='review'&&!locked?'Edit quantities':'Counting'}</BackButton>
     {error&&<s-banner tone="critical" heading={error}/>}
     {step==='search'&&<>
-      <s-text>Enter additional units counted by hand. These are added to your existing session quantities when you save.</s-text>
       <s-stack direction="inline" alignItems="center" justifyContent="space-between" gap="base">
         <s-text type="strong">{amount(entries.length,'product')} · {amount(units,'unit')} to add</s-text>
-        <s-button variant="primary" disabled={busy||disabled||invalid||!entries.length} onClick={review}>Review and save</s-button>
       </s-stack>
       <CatalogPicker request={request} allowedIds={allowed} memory={searchMemory.current} disabled={busy||disabled||locked} renderProduct={(product,rowDisabled)=><HandQuantityRow key={product.productId} product={product} value={quantities.get(product.productId)||''} already={counted.get(product.productId)||0} disabled={rowDisabled} notRequested={!!allowed&&!allowed.has(product.productId)} canViewOnHand={count.canViewOnHand} change={change}/>}/>
     </>}
     {step==='review'&&<>
       <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
         <s-text type="strong">{amount(entries.length,'product')} · {amount(units,'additional unit')}</s-text>
-        <s-button variant="primary" loading={busy} disabled={busy||disabled||!entries.length} onClick={save}>Save</s-button>
       </s-stack>
-      <s-text>Save adds these quantities as hand-count scan events in this session.</s-text>
-      {locked&&<s-banner tone="info" heading="Finish saving this batch">The quantities are locked for a safe retry. Saving again will not count them twice.</s-banner>}
+      {locked&&<s-banner tone="info" heading="Finish saving">Your quantities are kept. Retrying will not add them twice.</s-banner>}
       {!entries.length&&<s-text>No pending products. Go back to Hand count to add products.</s-text>}
       {entries.slice(page*40,(page+1)*40).map(entry=><s-section key={entry.product.productId}>
         <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">

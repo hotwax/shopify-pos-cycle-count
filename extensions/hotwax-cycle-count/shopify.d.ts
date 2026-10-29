@@ -203,6 +203,14 @@ declare module './src/count-cleanup.js' {
 }
 
 //@ts-ignore
+declare module './src/count-submission.js' {
+  const shopify:
+    | import('@shopify/ui-extensions/pos.home.modal.render').Api
+    | import('@shopify/ui-extensions/pos.product-details.action.render').Api;
+  const globalThis: { shopify: typeof shopify };
+}
+
+//@ts-ignore
 declare module './src/count-list.js' {
   const shopify:
     | import('@shopify/ui-extensions/pos.home.modal.render').Api
@@ -220,6 +228,14 @@ declare module './src/memo.js' {
 
 //@ts-ignore
 declare module './src/ProductRow.jsx' {
+  const shopify:
+    | import('@shopify/ui-extensions/pos.home.modal.render').Api
+    | import('@shopify/ui-extensions/pos.product-details.action.render').Api;
+  const globalThis: { shopify: typeof shopify };
+}
+
+//@ts-ignore
+declare module './src/InlineQuantity.jsx' {
   const shopify:
     | import('@shopify/ui-extensions/pos.home.modal.render').Api
     | import('@shopify/ui-extensions/pos.product-details.action.render').Api;
