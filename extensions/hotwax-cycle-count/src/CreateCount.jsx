@@ -24,7 +24,7 @@ export function CreateCount({request,storage,owner,timeZone,onCreated,back}) {
       products.push(...ids.slice(i,i+200).map(productId=>found.find(p=>p.productId===productId)||{productId,title:productId,sku:productId}));
     }
     if(!active.current)return;
-    if(draft){setName(draft.name);setType(draft.type);setStart(draft.start);setDue(draft.due);setSelected(new Map(products.map(p=>[p.productId,p])));}
+    if(draft){setName(draft.name);setType(['DYNAMIC_COUNT','DIRECTED_COUNT','HARD_COUNT'].includes(draft.type)?draft.type:'DYNAMIC_COUNT');setStart(draft.start);setDue(draft.due);setSelected(new Map(products.map(p=>[p.productId,p])));}
     pending.current=operation;if(operation)setStep('review');
   })().catch(e=>setError(e instanceof Error?e.message:'Could not complete this action. Your saved work is retained.')).finally(()=>{if(active.current)setBusy(false);});return()=>{active.current=false;};},[]);
   async function saveDraft(){await control.setEntry('drafts',NEW,{name,type,start,due,productIds:[...selected.keys()]});}
@@ -51,7 +51,7 @@ export function CreateCount({request,storage,owner,timeZone,onCreated,back}) {
     {step==='details'&&<>
       <s-section><s-stack direction="block" gap="base">
         <s-text-field label="Count name" value={name} disabled={busy||!!pending.current} onInput={e=>setName(e.currentTarget.value)}/>
-        <s-choice-list values={[type]} onChange={e=>setType(e.currentTarget.values[0])}><s-choice value="DYNAMIC_COUNT" disabled={busy||!!pending.current}>Dynamic count</s-choice><s-choice value="DIRECTED_COUNT" disabled={busy||!!pending.current}>Directed count</s-choice><s-choice value="HARD_COUNT" disabled={busy||!!pending.current}>Hard count</s-choice></s-choice-list>
+        <s-choice-list values={[type]} onChange={e=>{const next=e.currentTarget.values[0];if(['DYNAMIC_COUNT','DIRECTED_COUNT','HARD_COUNT'].includes(next))setType(next);}}><s-choice value="DYNAMIC_COUNT" selected={type==='DYNAMIC_COUNT'} disabled={busy||!!pending.current}>Dynamic count</s-choice><s-choice value="DIRECTED_COUNT" selected={type==='DIRECTED_COUNT'} disabled={busy||!!pending.current}>Directed count</s-choice><s-choice value="HARD_COUNT" selected={type==='HARD_COUNT'} disabled={busy||!!pending.current}>Hard count</s-choice></s-choice-list>
         <s-text color="subdued">{type==='DYNAMIC_COUNT'?'Build the list as you scan or hand count. For each product you include, count every unit in the store, including back stock. Products you do not include stay outside this count.':type==='DIRECTED_COUNT'?'Count a selected product list.':'Review the whole store inventory, with an optional starting product list.'}</s-text>
         <s-stack direction="inline" gap="none">
           <s-box inlineSize="50%" paddingInlineEnd="small"><s-date-field label="Start date (optional)" value={start} disabled={busy||!!pending.current} onInput={e=>setStart(e.currentTarget.value)}/></s-box>
