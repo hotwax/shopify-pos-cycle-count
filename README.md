@@ -98,7 +98,7 @@ npm run deploy -- --version <release-name> --message '<release-summary>'
 
 `shared/oms-build-config.ts` is generated and gitignored: `npm run build` and `npm run deploy` write it with development flags disabled, `npm run dev` writes preview flags, and tests or typechecks only create it when it is missing. Always build and deploy through the npm scripts; running `shopify app build` or `shopify app deploy` directly ships whatever flags are on disk. Building alone does not release an app. See [Shopify app deploy](https://shopify.dev/docs/api/shopify-cli/app/app-deploy) for the release command. Stop the development preview before checking an installed release; an already-open POS extension may need POS to be relaunched to load the released bundle.
 
-The initial implementation has been deployed to a demo store and opened on a physical iPad with the local development server stopped. The current local regression suite contains 98 passing tests. Builds fail if an extension bundle comes within 512 bytes of Shopify's 64 KB compressed limit (`scripts/check-bundle.mjs`). Raw device captures, local test readbacks, historical implementation notes and machine-specific tool configuration are deliberately excluded from this repository.
+The initial implementation has been deployed to a demo store and opened on a physical iPad with the local development server stopped. The current local regression suite contains 111 passing tests. Builds fail if an extension bundle comes within 512 bytes of Shopify's 64 KB compressed limit (`scripts/check-bundle.mjs`). Raw device captures, local test readbacks, historical implementation notes and machine-specific tool configuration are deliberately excluded from this repository.
 
 ## Customer rollout boundaries
 
@@ -128,6 +128,23 @@ UAT also requires the `DYNAMIC_COUNT` reference value from `docs/oms/DynamicCoun
 
 The bundle gate measures Brotli quality 11, matching Shopify CLI 4.9.4, and retains
 the 512-byte margin below 64 KB. Shopify's deployment validation is the final size check.
+
+Sandbox validation on 2026-10-29 used the installed release
+[`gorjana-sandbox-2026-10-29-r2`](https://dev.shopify.com/dashboard/129669934/apps/441352650753/versions/1186217590785)
+on a physical iPad running Shopify POS 11.17.1. App Home saved the UAT connection,
+the native tile opened Brooklyn (facility `49`), and a one-product/two-unit Dynamic
+Count reached `CYCLE_CNT_CMPLTD` with its session `SESSION_SUBMITTED` and no approval.
+The pending hand-count draft survived the extension refresh between r1 and r2.
+Reopening Create count confirmed that Dynamic remains selected on first load with
+matching guidance.
+The r2 POS bundle is 56,664 bytes Brotli-compressed; App Home is 9,060 bytes.
+
+This is a sandbox smoke test, not production acceptance. One session submission
+showed a connection error even though UAT subsequently confirmed it had completed;
+returning to Count summary reconciled the status. Automatic outcome reconciliation
+and clearer recovery remain follow-ups. App Home rendered on the iPad, while the
+desktop Chrome automation session displayed a blank page. Physical scanner,
+offline/reboot, multi-terminal and restricted-staff scenarios remain unverified.
 
 ### Acceptance
 
