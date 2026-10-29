@@ -187,10 +187,10 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
         {progress.canFinish&&<s-button variant="primary" disabled={busy||progressBusy||!!progressError} onClick={()=>{setDecision('completeCount');setView('confirm');}}>Finish count</s-button>}
         {!progress.canFinish&&progress.allSubmitted&&progress.uncounted>0&&<s-text color="subdued">{amount(progress.uncounted,'product')} still to check.</s-text>}
       </s-stack>}
-      {hasStarted&&(info.sessions.length>0||info.canCreateSession)&&<>
+      {hasStarted&&(info.sessions.length>0||info.canCreateSession)&&<s-stack direction="block" gap="base">
         <s-divider/>
         <s-section heading="Counting sessions"><s-stack direction="block" gap="base">
-          {(info.sessions.length>1||showSessions)&&<>
+          {(info.sessions.length>1||showSessions)&&<s-stack direction="block" gap="base">
             {info.sessions.slice(sessionPage*20,(sessionPage+1)*20).map((session,index)=><s-stack key={session.sessionId} direction="block" gap="none">
               {index>0&&<s-divider/>}
               <ActionRow title={session.name||session.sessionId}
@@ -199,14 +199,14 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
             </s-stack>)}
             <CompactPager page={sessionPage} pages={Math.max(1,Math.ceil(info.sessions.length/20))} total={info.sessions.length} label="sessions" onPage={setSessionPage} disabled={busy}/>
             {lockError&&<s-text tone="critical">{lockError}</s-text>}
-          </>}
+          </s-stack>}
           <s-stack direction="inline" gap="base">
             {info.canCreateSession&&<s-button disabled={busy} onClick={()=>run(showCreate)}>Add a session</s-button>}
             {info.sessions.length===1&&<s-button onClick={()=>setShowSessions(value=>!value)}>{showSessions?'Hide session':'Session details'}</s-button>}
           </s-stack>
         </s-stack></s-section>
         <s-divider/>
-      </>}
+      </s-stack>}
       <s-section heading="Products">
         {progressError&&<s-banner tone="critical" heading={progressError}/>}
         {info.canPreview?<s-stack direction="block" gap="base">
