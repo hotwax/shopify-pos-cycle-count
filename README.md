@@ -102,6 +102,35 @@ The initial implementation has been deployed to a demo store and opened on a phy
 
 ## Customer rollout boundaries
 
+### Gorjana sandbox
+
+`shopify.app.gorjana-sandbox.toml` identifies the separate **Gorjana Cycle Count Sandbox** app
+(`41bb8b2042d05ae284cbc6c68b54ce04`). Its custom distribution is restricted to
+`gorjana-sandbox.myshopify.com`; use `https://gorjana-maarg-uat.hotwax.io` in App Home.
+The default `shopify.app.toml` still identifies the original HotWax app.
+
+Use the named scripts so both build and deployment select the same sandbox configuration:
+
+```sh
+npm run build:gorjana-sandbox
+npm run deploy:gorjana-sandbox -- --version <release-name> --message '<release-summary>'
+```
+
+The UAT integration shop is `10000`. A legacy `HC_CUSTOM_APP` record shares its domain,
+so lookup selects the uniquely enabled integration and rejects ambiguous enabled records.
+Location mappings must also resolve uniquely; do not substitute a different facility when they do not.
+
+UAT registers the POS app through a dedicated `GORJANA_CC_SANDBOX` remote linked with
+purpose `SsctCycleCountPosApp`, separate from the existing default integration remote.
+Only its client identity and signature-verification secret are needed for sign-in;
+do not embed the secret in this repository or give this remote an outbound Shopify token.
+UAT also requires the `DYNAMIC_COUNT` reference value from `docs/oms/DynamicCountData.xml`.
+
+The bundle gate measures Brotli quality 11, matching Shopify CLI 4.9.4, and retains
+the 512-byte margin below 64 KB. Shopify's deployment validation is the final size check.
+
+### Acceptance
+
 - The app verifies lease ownership/generation before writes. Atomic ownership, expiry and count-completion fencing must also be enforced by OMS to protect against concurrent or legacy clients.
 - A PIN-only operator must not inherit the logged-in account's OMS authority. The existing login contract requires matching authenticated identities; broader staff delegation needs corresponding server authorization.
 - Customer-scale OMS loading, simultaneous terminals, sustained hardware-scanner throughput, physical network interruption, reboot recovery and customer permissions require separate acceptance.
