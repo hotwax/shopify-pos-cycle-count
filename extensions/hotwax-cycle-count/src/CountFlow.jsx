@@ -153,6 +153,7 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
   const resume=info&&directSession(info);
   async function startCounting(){const started=await request('startCount',{workEffortId});setInfo(started);const session=directSession(started);if(session)await openSession(session.sessionId,undefined,session.name);else await refresh();}
   const canManage=info?.canComplete&&info.statusId==='CYCLE_CNT_IN_PRGS';
+  const hasStarted=info&&info.statusId!=='CYCLE_CNT_CREATED';
   const canEditContribution=canManage&&contribution?.editable;
   const zeroItems=progress?.items.filter(item=>item.isRequested&&item.quantity===null)||[];
   const extras=progress?.items.filter(item=>!item.isRequested&&item.quantity!==null&&item.decision!=='SKIPPED')||[];
@@ -175,7 +176,7 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
         {!info.canStart&&resume&&<s-button variant="primary" disabled={busy} onClick={()=>openSession(resume.sessionId,undefined,resume.name)}>Resume counting</s-button>}
       </s-stack>
       {info.canPreview&&<s-section heading="Progress"><s-box slot="secondary-actions" inlineSize="24px" blockSize="24px">{progressBusy&&<s-spinner accessibilityLabel="Updating count progress"/>}</s-box><s-stack direction="block" gap="base">
-        <s-stack direction="inline" gap="large" justifyContent="space-between">
+        <s-stack direction="inline" gap="large" justifyContent="start">
           <s-stack direction="block" gap="small"><s-heading>{progress?countedProducts:'—'}</s-heading><s-text color="subdued">Products counted</s-text></s-stack>
           {!!progress?.uncounted&&<s-stack direction="block" gap="small"><s-heading>{progress.uncounted}</s-heading><s-text color="subdued">Uncounted</s-text></s-stack>}
           <s-stack direction="block" gap="small"><s-heading>{progress?summaryItems.reduce((units,item)=>units+(item.quantity??0),0):'—'}</s-heading><s-text color="subdued">Units counted</s-text></s-stack>
@@ -186,17 +187,26 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
         {progress.canFinish&&<s-button variant="primary" disabled={busy||progressBusy||!!progressError} onClick={()=>{setDecision('completeCount');setView('confirm');}}>Finish count</s-button>}
         {!progress.canFinish&&progress.allSubmitted&&progress.uncounted>0&&<s-text color="subdued">{amount(progress.uncounted,'product')} still to check.</s-text>}
       </s-stack>}
-      {(info.sessions.length>1||showSessions)&&<s-section heading="Counting sessions"><s-stack direction="block" gap="base">
-        {info.sessions.slice(sessionPage*20,(sessionPage+1)*20).map(session=><ActionRow key={session.sessionId} title={session.name||session.sessionId}
-          detail={`${info.areas.find(a=>a.id===session.area)?.name||session.area} · ${session.mine?'You':session.operator}`}
-          {...lockStatus(session.sessionId)} meta={countStatus(session)} disabled={busy} onClick={()=>openSession(session.sessionId,undefined,session.name)}/>)}
-        <CompactPager page={sessionPage} pages={Math.max(1,Math.ceil(info.sessions.length/20))} total={info.sessions.length} label="sessions" onPage={setSessionPage} disabled={busy}/>
-        {lockError&&<s-text tone="critical">{lockError}</s-text>}
-      </s-stack></s-section>}
-      <s-stack direction="inline" gap="base">
-        {info.canCreateSession&&<s-button disabled={busy} onClick={()=>run(showCreate)}>Add a session</s-button>}
-        {info.sessions.length===1&&<s-button onClick={()=>setShowSessions(value=>!value)}>{showSessions?'Hide session':'Session details'}</s-button>}
-      </s-stack>
+      {hasStarted&&(info.sessions.length>0||info.canCreateSession)&&<>
+        <s-divider/>
+        <s-section heading="Counting sessions"><s-stack direction="block" gap="base">
+          {(info.sessions.length>1||showSessions)&&<>
+            {info.sessions.slice(sessionPage*20,(sessionPage+1)*20).map((session,index)=><s-stack key={session.sessionId} direction="block" gap="none">
+              {index>0&&<s-divider/>}
+              <ActionRow title={session.name||session.sessionId}
+                detail={`${info.areas.find(a=>a.id===session.area)?.name||session.area} · ${session.mine?'You':session.operator}`}
+                {...lockStatus(session.sessionId)} meta={countStatus(session)} disabled={busy} onClick={()=>openSession(session.sessionId,undefined,session.name)}/>
+            </s-stack>)}
+            <CompactPager page={sessionPage} pages={Math.max(1,Math.ceil(info.sessions.length/20))} total={info.sessions.length} label="sessions" onPage={setSessionPage} disabled={busy}/>
+            {lockError&&<s-text tone="critical">{lockError}</s-text>}
+          </>}
+          <s-stack direction="inline" gap="base">
+            {info.canCreateSession&&<s-button disabled={busy} onClick={()=>run(showCreate)}>Add a session</s-button>}
+            {info.sessions.length===1&&<s-button onClick={()=>setShowSessions(value=>!value)}>{showSessions?'Hide session':'Session details'}</s-button>}
+          </s-stack>
+        </s-stack></s-section>
+        <s-divider/>
+      </>}
       <s-section heading="Products">
         {progressError&&<s-banner tone="critical" heading={progressError}/>}
         {info.canPreview?<s-stack direction="block" gap="base">
