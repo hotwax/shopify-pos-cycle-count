@@ -68,7 +68,7 @@ function ProductListContent({items,disabled=false,directed=false,onSelect,onQuan
       </s-choice-list>
       <s-button slot="primary-action" command="--hide" commandFor={sortId}>Done</s-button>
     </s-modal>}
-    {!result.total&&<s-text>No products match this view.</s-text>}
+    {!result.total&&<s-text>{view==='uncounted'&&!query&&items.length?'All products counted.':query?'No matching products.':'No products in this view.'}</s-text>}
     {/* Shopify hits can reorder a page after local matches render. Key the
         bounded native row subtree by that order for both search phases. */}
     <s-stack direction="block" gap={onQuantity?'small':'none'} key={`${view}:${sort}:${search}:${onQuantity?page:result.items.map(item=>item.productId).join(",")}`}>
