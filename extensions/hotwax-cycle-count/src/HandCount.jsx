@@ -104,7 +104,6 @@ export function HandCount({request,engine,storage,owner,count,done,disabled=fals
     <BackButton loading={busy} disabled={busy} onClick={back}>{step==='review'&&!locked?'Edit quantities':'Counting'}</BackButton>
     {error&&<s-banner tone="critical" heading={error}/>}
     {step==='search'&&<>
-      <s-text>Enter units to add to this count.</s-text>
       <s-stack direction="inline" alignItems="center" justifyContent="space-between" gap="base">
         <s-text type="strong">{amount(entries.length,'product')} · {amount(units,'unit')} to add</s-text>
       </s-stack>

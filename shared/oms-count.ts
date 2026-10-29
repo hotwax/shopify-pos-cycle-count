@@ -197,7 +197,7 @@ export async function countDetail(id: string, ctx: Context, oms: OmsConnection) 
     if (!product) throw new OmsLookupError("Count product details are incomplete. Saved quantities have been kept.");
     const quantities = entries.map(row => number(row.quantity)).filter((q): q is number => q !== null);
     const quantity = quantities.length ? quantities.reduce((a, b) => a + b, 0) : null;
-    return {...product.presentation as object, productId, title: text(product.productName || product.internalName || productId), sku: text(product.internalName), quantity,
+    return {...product.presentation as object, productId, title: text((product.presentation as OmsRow|undefined)?.title || product.productName || product.internalName || productId), sku: text(product.internalName), quantity,
       assignedAt:Number(entries[0].createdDate||0),lastUpdatedAt:Math.max(...entries.map(r=>Number(r.lastUpdatedStamp||r.createdDate||0))),
       isRequested: entries.some(row => text(row.isRequested) !== "N"),
       ...visibleCountInventory(quantity, number(balances.get(productId)?.quantityOnHand), ctx.canViewOnHand)};

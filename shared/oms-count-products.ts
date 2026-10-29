@@ -40,7 +40,9 @@ export function presentProduct(product: OmsRow, prefs: ProductPreferences) {
   const resolve=(key: string)=>['SKU','SHOPIFY_PROD_SKU'].includes(key)?text(ids.find(i=>i.type==='SKU')?.value):
     ['parentProductName','groupName'].includes(key)?text(product.parentProductName||product.groupName):
     ['productId','internalName','title','primaryProductCategoryName'].includes(key)?text(product[key]):text(ids.find(i=>i.type===key)?.value);
-  return {productId:id,title:text(product.productName||product.title||product.internalName||id),
+  const name=text(product.productName||product.title||product.internalName||id),parent=text(product.parentProductName||product.groupName);
+  const title=parent&&name!==parent&&!name.startsWith(`${parent} · `)?`${parent} · ${name}`:name;
+  return {productId:id,title,
     sku:text(ids.find(i=>i.type==='SKU')?.value||product.internalName||id),
     primary:resolve(prefs.primary)||resolve('SKU')||id,secondary:resolve(prefs.secondary)||id,
     imageUrl:text(product.smallImageUrl||product.mediumImageUrl||product.mainImageUrl),

@@ -80,7 +80,7 @@ export async function countProgress(id: string, ctx: Context, oms: OmsConnection
   }
   const {details} = hydrate ? await productDetails([...combined.keys()], {...ctx, canViewOnHand:false}, oms) : {details:new Map<string,OmsRow>()};
   const items = [...combined].map(([productId, row]) => ({...details.get(productId)?.presentation as object, productId,
-    title:text(details.get(productId)?.productName || details.get(productId)?.internalName || row.internalName || productId),
+    title:text((details.get(productId)?.presentation as OmsRow|undefined)?.title || details.get(productId)?.productName || details.get(productId)?.internalName || row.internalName || productId),
     sku:text(details.get(productId)?.internalName || row.internalName || productId), quantity:number(row.quantity),
     lastUpdatedAt:Number(row.maxLastUpdatedAt || 0),
     isRequested: info.type === 'HARD_COUNT' || text(row.isRequested) !== 'N',

@@ -61,3 +61,10 @@ test('restored product display includes parent name when variant response is onl
   const result=await fetchVariantDisplays({fetchProductVariantsWithIds:async()=>({fetchedResources:[{id:7,productId:5,title:'A',sku:'SKU-A'}]}),fetchProductsWithIds:async ids=>{assert.deepEqual(ids,[5]);return {fetchedResources:[{id:5,title:'Alphabet Charm'}]};}} as any,[7]);
   assert.equal(result.get(7)?.title,'Alphabet Charm · A');
 });
+
+
+test('catalog titles put the parent product before its short variant label',async()=>{
+  const {presentProduct}=await import('../shared/oms-count-products.ts');
+  const item=presentProduct({productId:'p1',productName:'Gold',parentProductName:'Parker Necklace'}, {barcode:'UPC',primary:'SKU',secondary:'parentProductName'});
+  assert.equal(item.title,'Parker Necklace · Gold');assert.equal(item.productId,'p1');
+});

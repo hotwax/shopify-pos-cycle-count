@@ -423,7 +423,7 @@ export function CountWorkspace({owner,setHeader}) {
           {canCount&&(last||posScannerConnected||hidMode)&&<ScanFeedback last={last} hidMode={hidMode}/>}
           <s-stack direction="inline" gap="base">
             {sources.includes('camera')&&<s-button variant={posScannerConnected?'primary':'secondary'} disabled={busy||!canCount} onClick={()=>{setHidMode(false);shopify.scanner.showCameraScanner();}}>Scan barcode</s-button>}
-            <s-button variant={posScannerConnected?'secondary':'primary'} disabled={busy||!canCount} onClick={()=>{setHidMode(false);go('hand');}}>Enter quantities</s-button>
+            <s-button variant={posScannerConnected||count.items.some(item=>item.quantity!=null)?'secondary':'primary'} disabled={busy||!canCount} onClick={()=>{setHidMode(false);go('hand');}}>Enter quantities</s-button>
           </s-stack>
           {hidMode&&<HidBarcodeEntry key={count.sessionId} disabled={busy||!canCount} add={enqueue}/>}
           <s-box minBlockSize="24px"><s-clickable onClick={()=>go('options')}><s-text color="subdued" tone={syncError?'critical':'auto'}>{syncError?'Save needs attention':saving?'Saving…':stats?.dirty?`${amount(stats.dirty,'product')} waiting to save`:stats?.pending?'Finding products…':'Saved'}</s-text></s-clickable></s-box>
