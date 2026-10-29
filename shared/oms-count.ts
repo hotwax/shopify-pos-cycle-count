@@ -413,8 +413,12 @@ export async function handleCount(
   }
   if (action === "submit")
     return withCountLock(sessionId, ctx, oms, async () => {
-      const detail = await countDetail(sessionId, ctx, oms);
-      if (!detail.items.some(item => item.quantity !== null))
+      // Submission needs fresh status and saved quantities, not product names,
+      // images or inventory enrichment. Those reads can outlast a POS request.
+      const latest=await ownedCount(sessionId,ctx,oms,true);
+      if(!EDITABLE.has(text(latest.session.statusId)))throw new OmsLookupError('Session status changed. Check submission again.',409);
+      const saved=await sessionRows(sessionId,oms);
+      if (!saved.some(item => number(item.quantity) !== null))
         throw new OmsLookupError(
           "Scan at least one product before submitting.",
           400,
