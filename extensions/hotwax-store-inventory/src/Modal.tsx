@@ -4,7 +4,7 @@ import {useEffect, useRef, useState} from 'preact/hooks';
 import {inventoryScope, sameInventoryScope, type InventoryScope} from '../../../shared/store-inventory';
 import {
   hotWaxInventoryLevel, hotWaxProductForVariant, inventoryEventSources, inventoryLevel, inventoryLocation,
-  proposedVariances, recentInventoryEvents, searchInventory, shopifyVariantForHotWaxProduct,
+  proposedVariances, pushInventoryBatches, queuedInventoryBatches, recentInventoryEvents, searchInventory, shopifyVariantForHotWaxProduct,
   type HotWaxLevel, type InventoryEvent, type ProposedVariance, type Variant,
 } from './Inventory';
 import {eventSourceKey, type EventSource} from './InventoryEventSources';
@@ -43,6 +43,15 @@ function duration(milliseconds: number) {
   if (hours) return hours+'h'+(minutes%60 ? ' '+minutes%60+'m' : '');
   if (minutes) return minutes+'m'+(seconds%60 ? ' '+seconds%60+'s' : '');
   return seconds+'s';
+}
+
+function useNow() {
+  const [now,setNow] = useState(Date.now);
+  useEffect(()=>{
+    const timer = setInterval(()=>setNow(Date.now()),15000);
+    return ()=>clearInterval(timer);
+  },[]);
+  return now;
 }
 
 function eventTiming(event: InventoryEvent, now: number) {
@@ -160,9 +169,10 @@ function InventoryHome({scope,owner}: {scope: InventoryScope; owner: string}) {
 type Store = ReturnType<typeof useStoreLocation>;
 type ListFilter = {id?: string; loading: boolean; error?: string};
 
-function InventoryHistory({store,openProduct,initialTab='events',itemFilter,productFilter,productImageUrl}: {
+function InventoryHistory({store,openProduct,initialTab='events',itemFilter,productFilter,productImageUrl,pushScope}: {
   store: Store; openProduct?: (product: Variant,tab: HistoryTab) => void;
   initialTab?: HistoryTab; itemFilter?: ListFilter; productFilter?: ListFilter; productImageUrl?: string;
+  pushScope?: InventoryScope;
 }) {
   const [tab,setTab] = useState(initialTab);
   return <s-section heading="Inventory changes">
@@ -176,7 +186,8 @@ function InventoryHistory({store,openProduct,initialTab='events',itemFilter,prod
         <s-tab controls="proposals">Proposed variances</s-tab>
       </s-tab-list>
       <s-tab-panel id="events">
-        {tab==='events' && <InventoryEventList store={store} filter={itemFilter} openProduct={openProduct} productImageUrl={productImageUrl}/>}
+        {tab==='events' && <InventoryEventList store={store} filter={itemFilter} openProduct={openProduct}
+          productImageUrl={productImageUrl} pushScope={pushScope}/>}
       </s-tab-panel>
       <s-tab-panel id="proposals">
         {tab==='proposals' && <ProposedVarianceList store={store} filter={productFilter} openProduct={openProduct} productImageUrl={productImageUrl}/>}
@@ -185,8 +196,9 @@ function InventoryHistory({store,openProduct,initialTab='events',itemFilter,prod
   </s-section>;
 }
 
-function InventoryEventList({store,filter,openProduct,productImageUrl}: {
+function InventoryEventList({store,filter,openProduct,productImageUrl,pushScope}: {
   store: Store; filter?: ListFilter; openProduct?: (product: Variant,tab: HistoryTab) => void; productImageUrl?: string;
+  pushScope?: InventoryScope;
 }) {
   const {connected,location,locationError} = store;
   const itemId = filter?.id;
@@ -194,16 +206,39 @@ function InventoryEventList({store,filter,openProduct,productImageUrl}: {
   const [events,setEvents] = useState<InventoryEvent[]>([]);
   const [sources,setSources] = useState(new Map<string,EventSource>());
   const [showSynced,setShowSynced] = useState(false);
-  const [now,setNow] = useState(Date.now);
+  const now = useNow();
   const [visibleCount,setVisibleCount] = useState(EVENT_ROWS_PER_PAGE);
   const [reading,setReading] = useState(true);
   const [listError,setListError] = useState('');
+  const [pushing,setPushing] = useState(false);
+  const [pushResult,setPushResult] = useState<{sent: number; error: string}>();
+  const pushRequest = useRef<AbortController>();
   const visibleEvents = showSynced ? events : events.filter(event=>event.state!=='Synced');
+  const batchIds = pushScope ? queuedInventoryBatches(events) : [];
 
-  useEffect(()=>{
-    const timer = setInterval(()=>setNow(Date.now()),15000);
-    return ()=>clearInterval(timer);
-  },[]);
+  useEffect(()=>()=>pushRequest.current?.abort(),[]);
+
+  async function pushNow() {
+    if (!pushScope || !itemId || !location || !connected || !batchIds.length || pushRequest.current) return;
+    const inScope = () => scopeKey()===JSON.stringify(pushScope);
+    if (!inScope()) return;
+    const request = new AbortController();
+    pushRequest.current = request;
+    setPushing(true);
+    setPushResult(undefined);
+    try {
+      const result = await pushInventoryBatches(location,itemId,batchIds,inScope,request.signal);
+      if (!request.signal.aborted && inScope()) setPushResult(result);
+    } catch (cause) {
+      if (!request.signal.aborted && inScope()) setPushResult({sent:0,error:errorText(cause,'HotWax could not check the queue.')});
+    } finally {
+      pushRequest.current = undefined;
+      if (!request.signal.aborted && inScope()) {
+        setPushing(false);
+        store.refreshLocation();
+      }
+    }
+  }
 
   useEffect(()=>{
     if (!connected || !location || !canRead) return;
@@ -239,9 +274,19 @@ function InventoryEventList({store,filter,openProduct,productImageUrl}: {
   const error = locationError || filter?.error || listError;
   const loading = connected && !error && (!location || filter?.loading || (canRead && reading));
   return <s-stack direction="block" gap="small" paddingBlock="base">
-    <s-switch label="Show synced" checked={showSynced} onChange={event=>{
-      setShowSynced(Boolean(event.currentTarget.checked));setVisibleCount(EVENT_ROWS_PER_PAGE);
-    }}/>
+    <s-stack direction="inline" alignItems="center" justifyContent="space-between" gap="base">
+      <s-switch label="Show synced" checked={showSynced} onChange={event=>{
+        setShowSynced(Boolean(event.currentTarget.checked));setVisibleCount(EVENT_ROWS_PER_PAGE);
+      }}/>
+      {pushScope && <s-button variant="secondary" loading={pushing}
+        disabled={!connected || loading || Boolean(error) || !batchIds.length || pushing} onClick={pushNow}>Push now</s-button>}
+    </s-stack>
+    {pushScope && connected && !loading && !error && !batchIds.length &&
+      <s-text type="small" color="subdued">No batches ready to push for this product.</s-text>}
+    {pushResult && <s-banner tone={pushResult.error?'warning':pushResult.sent?'success':'info'}>
+      {pushResult.sent ? (pushResult.sent===1?'1 batch synced.':pushResult.sent+' batches synced.')+' ' : ''}
+      {pushResult.error || (!pushResult.sent ? 'No queued batches remained.' : '')}
+    </s-banner>}
     {error && <s-banner tone="warning" heading="Inventory ledger unavailable">{error}</s-banner>}
     {loading && <Loading label="Loading inventory events…"/>}
     {!loading && connected && !error && !visibleEvents.length &&
@@ -273,6 +318,7 @@ function ProposedVarianceList({store,filter,openProduct,productImageUrl}: {
   const [reading,setReading] = useState(true);
   const [listError,setListError] = useState('');
   const [visibleCount,setVisibleCount] = useState(EVENT_ROWS_PER_PAGE);
+  const now = useNow();
 
   useEffect(()=>{
     if (!connected || !location || !canRead) return;
@@ -301,9 +347,10 @@ function ProposedVarianceList({store,filter,openProduct,productImageUrl}: {
     {loading && <Loading label="Loading proposed variances…"/>}
     {!loading && connected && !error && !proposals.length &&
       <s-text color="subdued">No cycle count changes awaiting approval.</s-text>}
-    {canRead && proposals.slice(0,visibleCount).map(({id,product,countName,counted,delta})=>
+    {canRead && proposals.slice(0,visibleCount).map(({id,product,countName,counted,delta,lastUpdatedAt})=>
       <Row key={id} title={filter ? countName : product.title}
         subtitle={filter ? undefined : countName} detail={'Counted '+counted}
+        timing={lastUpdatedAt && lastUpdatedAt<=now ? 'Waiting about '+duration(now-lastUpdatedAt) : 'Wait time unavailable'}
         imageUrl={productImageUrl ?? product.imageUrl} value={signed(delta)} state="Awaiting approval"
         onClick={openProduct ? ()=>openProduct(product,'proposals') : undefined}/>)}
     {canRead && visibleCount < proposals.length && <s-stack direction="inline">
@@ -556,16 +603,15 @@ function ProductDetail({scope,selected,initialTab}: {scope: InventoryScope; sele
               </s-section>
             </s-box>
           </s-stack>
-          <InventoryHistory store={store} initialTab={initialTab} productImageUrl={product.imageUrl}
+          <InventoryHistory store={store} initialTab={initialTab} productImageUrl={product.imageUrl} pushScope={scope}
             itemFilter={{id:itemId,loading:!itemId && reading,error:itemId ? undefined : detailError}}
             productFilter={{id:productId,loading:waitingForProduct,error:productError}}/>
           <s-section heading="Inventory actions">
             <s-stack direction="block" gap="small">
               <s-stack direction="inline" gap="base">
-                <s-button variant="secondary" disabled>Push now</s-button>
                 <s-button variant="secondary" disabled>Set available</s-button>
               </s-stack>
-              <s-text type="small" color="subdued">Inventory changes are unavailable in this version.</s-text>
+              <s-text type="small" color="subdued">Set available is unavailable in this version.</s-text>
             </s-stack>
           </s-section>
         </s-stack>

@@ -22,11 +22,13 @@ export type Variant = {
 export type InventoryEvent = {
   id: string; itemId: string; eventType: string; source: string; reference: string;
   at: number; syncedAt?: number; delta: number; state: string; product?: Variant;
+  messageId: string; messageType: string; messageAt: number;
 };
 export type InventoryLevel = {available: number | null; onHand: number | null; committed: number | null; checkedAt: number};
 export type HotWaxLevel = {atp: number | null; reservations: number | null; onHand: number | null; checkedAt: number};
 export type ProposedVariance = {
   id: string; product: Variant & {hotWaxProductId: string}; countName: string; counted: number; delta: number;
+  lastUpdatedAt: number | null;
 };
 type GraphPage<Node> = {edges: {node: Node}[]; pageInfo: {hasNextPage: boolean; endCursor?: string | null}};
 type Reservation = {quantity: string | number | null};
@@ -47,6 +49,8 @@ type VariantNode = {
 };
 
 const LEDGER = '/rest/s1/sob/shopify/locationInventoryAdjustmentDetails';
+const LOCATION_MESSAGE = 'ShopifyLocationInventoryAdjustment';
+const SYSTEM_MESSAGES = '/rest/s1/admin/systemMessages/';
 const LEVELS = 'inventoryLevel(locationId: $location) { quantities(names: ["available", "on_hand", "committed"]) { name quantity } }';
 function variantFields(imageSize: number) {
   const preview = `preview { image { url(transform: {maxWidth: ${imageSize}, maxHeight: ${imageSize}}) } }`;
@@ -91,6 +95,74 @@ export async function recentInventoryEvents(location: Location, signal: AbortSig
   if (itemId) return events;
   const products = await ledgerProducts(oms,location.shopId,events);
   return events.map(event=>({...event,product:products.get(event.itemId)}));
+}
+
+export function queuedInventoryBatches(events: InventoryEvent[]) {
+  const batches = events.filter(event=>event.state==='Queued' && event.messageType===LOCATION_MESSAGE && event.messageId);
+  batches.sort((left,right)=>left.messageAt-right.messageAt);
+  return [...new Set(batches.map(event=>event.messageId))];
+}
+
+function batchMatchesItem(message: OmsRow, itemId: string, locationId: string) {
+  if (message.isOutgoing!=='Y' || message.systemMessageTypeId!==LOCATION_MESSAGE) return false;
+  try {
+    const payload = JSON.parse(text(message.messageText));
+    const input = payload.variables?.input;
+    const targets = input?.changes ?? input?.quantities;
+    const target = Array.isArray(targets) && targets.length===1 ? targets[0] : null;
+    return target?.inventoryItemId==='gid://shopify/InventoryItem/'+itemId &&
+      target?.locationId==='gid://shopify/Location/'+locationId;
+  } catch {
+    return false;
+  }
+}
+
+export async function pushInventoryBatches(
+  location: Location, itemId: string, reviewedIds: string[], inScope: () => boolean, signal: AbortSignal,
+) {
+  const events = await recentInventoryEvents(location,signal,itemId);
+  const messageIds = queuedInventoryBatches(events).filter(id=>reviewedIds.includes(id));
+  let sent = 0;
+  let error = '';
+  for (const id of messageIds) {
+    if (signal.aborted || !inScope()) break;
+    const path = SYSTEM_MESSAGES+validId(id);
+    const oms = connection(location,signal);
+    try {
+      const batch = await oms.get(path);
+      if (text(batch.systemMessageId)!==id || !batchMatchesItem(batch,itemId,location.locationId)) {
+        error = 'The queued batch could not be matched to this product and store.';
+        break;
+      }
+      if (batch.statusId==='SmsgSent') continue;
+      if (batch.statusId!=='SmsgProduced') {
+        error = 'The batch changed state. Refresh its status before trying again.';
+        break;
+      }
+      if (signal.aborted || !inScope()) break;
+      let sendDenied = false;
+      try {
+        await oms.mutate(path+'/send',{systemMessageId:id});
+      } catch (cause) {
+        // The sender can complete after the request fails or times out.
+        sendDenied = cause instanceof OmsLookupError && cause.status===403;
+      }
+      if (signal.aborted || !inScope()) break;
+      const result = await connection(location,signal).get(path);
+      if (text(result.systemMessageId)!==id || result.statusId!=='SmsgSent') {
+        error = sendDenied ? 'Your HotWax account cannot send this batch.'
+          : 'Shopify delivery could not be confirmed. Refresh to check the batch.';
+        break;
+      }
+      sent++;
+    } catch (cause) {
+      error = cause instanceof OmsLookupError && cause.status===403
+        ? 'Your HotWax account cannot access this batch.'
+        : 'HotWax could not verify the batch. Refresh to check its status.';
+      break;
+    }
+  }
+  return {sent,error};
 }
 
 export function inventoryEventSources(location: Location, events: InventoryEvent[], signal: AbortSignal) {
@@ -146,6 +218,7 @@ export async function proposedVariances(location: Location, signal: AbortSignal,
       proposals.push({
         id:id+':'+hotWaxProductId,product:{hotWaxProductId,title,sku,imageUrl:/^https:\/\//i.test(image)?image:undefined},
         countName:text(count.workEffortName || count.description || id),counted,delta,
+        lastUpdatedAt:inventoryQuantity(count.lastUpdatedStamp),
       });
     }
     return proposals;
@@ -224,6 +297,7 @@ function readEvent(row: OmsRow): InventoryEvent {
     itemId,reference,delta,at:Number(row.createdDate),eventType:text(row.eventTypeId),
     source:text(row.eventTypeDescription || row.eventTypeId),
     state:message ? states[status] || 'Assigned' : 'Pending',
+    messageId:message,messageType:text(row.systemMessageTypeId),messageAt:Number(row.systemMessageInitDate ?? row.createdDate),
     syncedAt:message && status==='SmsgSent' && row.systemMessageProcessedDate!=null
       ? Number(row.systemMessageProcessedDate) : undefined,
   };
