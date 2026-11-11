@@ -6,12 +6,12 @@ import {productSearchDetails} from '../../../shared/oms-count-products';
 import {reviewRows} from '../../../shared/oms-count-workflows';
 import {readEventSources} from './InventoryEventSources';
 
-type Location = {
+export type Location = {
   shopId: string;
+  productStoreId: string;
   locationId: string;
   facilityId: string;
   name: string;
-  timeZone?: string;
   token: string;
 };
 
@@ -22,7 +22,7 @@ export type Variant = {
 export type InventoryEvent = {
   id: string; itemId: string; eventType: string; source: string; reference: string;
   at: number; syncedAt?: number; delta: number; state: string; product?: Variant;
-  messageId: string; messageType: string; messageAt: number;
+  messageId: string; messageType: string; messageAt: number; reset: boolean;
 };
 export type InventoryLevel = {available: number | null; onHand: number | null; committed: number | null; checkedAt: number};
 export type HotWaxLevel = {atp: number | null; reservations: number | null; onHand: number | null; checkedAt: number};
@@ -37,7 +37,7 @@ type StockItem = {
   availableToPromiseTotal: string | number | null; quantityOnHandTotal: string | number | null;
   reservations: GraphPage<Reservation>;
 };
-type Ledger = {details: unknown};
+type Ledger = {details: unknown; hasMore?: boolean; detailCount?: number};
 type Quantities = {name: string; quantity: number}[];
 type ItemNode = {id: string; inventoryLevel?: {quantities: Quantities}; variant?: VariantNode};
 type MediaPreview = {preview?: {image?: {url: string} | null} | null};
@@ -73,20 +73,26 @@ export async function inventoryLocation(scope: InventoryScope, getSessionToken: 
   const {shop,facilityId} = await shopFacility(oms, 'https://'+scope.shopDomain, scope.locationId);
   if (!facilityId) throw new OmsLookupError('This Shopify location has no HotWax facility.');
   const facility = await oms.get('/rest/s1/admin/facilities/'+encodeURIComponent(facilityId));
-  return {shopId:text(shop.shopId),locationId:scope.locationId,facilityId,name:text(facility.facilityName),
-    timeZone:text(facility.facilityTimeZone),token:await oms.accessToken()};
+  return {shopId:text(shop.shopId),productStoreId:text(shop.productStoreId),locationId:scope.locationId,
+    facilityId,name:text(facility.facilityName),token:await oms.accessToken()};
 }
 
-function connection(location: Location, signal?: AbortSignal) {
-  return new OmsConnection({shopifySessionToken:'',shopifyLocationId:location.locationId,omsToken:location.token,signal});
+export function inventoryConnection(location: Location, signal?: AbortSignal, readBudgetMs?: number) {
+  return new OmsConnection({
+    shopifySessionToken:'',shopifyLocationId:location.locationId,omsToken:location.token,signal,readBudgetMs,
+  });
+}
+
+function locationLedgerPage(oms: OmsConnection, location: Location, pageIndex: number) {
+  const query = new URLSearchParams({
+    shopId:location.shopId,shopifyLocationId:location.locationId,mode:'RECENT',pageSize:'500',pageIndex:String(pageIndex),
+  });
+  return oms.get<Ledger>(LEDGER+'?'+query);
 }
 
 export async function recentInventoryEvents(location: Location, signal: AbortSignal, itemId?: string) {
-  const query = new URLSearchParams({
-    shopId:location.shopId,shopifyLocationId:location.locationId,mode:'RECENT',pageSize:'500',pageIndex:'0',
-  });
-  const oms = connection(location,signal);
-  const data = await oms.get<Ledger>(LEDGER+'?'+query);
+  const oms = inventoryConnection(location,signal);
+  const data = await locationLedgerPage(oms,location,0);
   if (!Array.isArray(data.details)) throw new OmsLookupError('HotWax returned an incomplete inventory ledger.');
   const events = rows(data.details)
     .filter(row=>text(row.shopId)===location.shopId && text(row.shopifyLocationId)===location.locationId &&
@@ -95,6 +101,45 @@ export async function recentInventoryEvents(location: Location, signal: AbortSig
   if (itemId) return events;
   const products = await ledgerProducts(oms,location.shopId,events);
   return events.map(event=>({...event,product:products.get(event.itemId)}));
+}
+
+export async function productSyncEvents(location: Location, itemId: string, signal: AbortSignal) {
+  const oms = inventoryConnection(location,signal);
+  const events: InventoryEvent[] = [];
+  const seen = new Set<string>();
+  let expectedCount: number | undefined;
+  for (let index = 0; ; index++) {
+    const page = await locationLedgerPage(oms,location,index);
+    const entries = rows(page.details);
+    if (!Array.isArray(page.details) || entries.length!==page.details.length ||
+        !Number.isSafeInteger(page.detailCount) || typeof page.hasMore!=='boolean' ||
+        (expectedCount!==undefined && page.detailCount!==expectedCount) || (page.hasMore && !entries.length)) {
+      throw new OmsLookupError('HotWax could not verify the complete location ledger.');
+    }
+    expectedCount = page.detailCount;
+    for (const row of entries) {
+      const event = readEvent(row);
+      const key = row.shopifyInventoryAdjustmentId && row.shopifyInventoryAdjustmentSeqId!=null
+        ? JSON.stringify([row.shopifyInventoryAdjustmentId,row.shopifyInventoryAdjustmentSeqId])
+        : JSON.stringify([event.id,event.at]);
+      if (text(row.shopId)!==location.shopId || text(row.shopifyLocationId)!==location.locationId ||
+          !event.itemId || !event.reference || seen.has(key)) {
+        throw new OmsLookupError('The location ledger changed while loading.');
+      }
+      seen.add(key);
+      if (text(row.shopifyInventoryItemId)!==itemId) continue;
+      if (event.state==='Synced' || event.state==='Cancelled') continue;
+      if (inventoryQuantity(row.computedInventoryChange)===null || !Number.isFinite(event.at) ||
+          (event.eventType.endsWith('_RESET') && row.resetInventoryLevel==null)) {
+        throw new OmsLookupError('A pending inventory change has incomplete quantities.');
+      }
+      events.push(event);
+    }
+    if (!page.hasMore) {
+      if (seen.size!==expectedCount) throw new OmsLookupError('The location ledger changed while loading.');
+      return events;
+    }
+  }
 }
 
 export function queuedInventoryBatches(events: InventoryEvent[]) {
@@ -127,7 +172,7 @@ export async function pushInventoryBatches(
   for (const id of messageIds) {
     if (signal.aborted || !inScope()) break;
     const path = SYSTEM_MESSAGES+validId(id);
-    const oms = connection(location,signal);
+    const oms = inventoryConnection(location,signal);
     try {
       const batch = await oms.get(path);
       if (text(batch.systemMessageId)!==id || !batchMatchesItem(batch,itemId,location.locationId)) {
@@ -148,7 +193,7 @@ export async function pushInventoryBatches(
         sendDenied = cause instanceof OmsLookupError && cause.status===403;
       }
       if (signal.aborted || !inScope()) break;
-      const result = await connection(location,signal).get(path);
+      const result = await inventoryConnection(location,signal).get(path);
       if (text(result.systemMessageId)!==id || result.statusId!=='SmsgSent') {
         error = sendDenied ? 'Your HotWax account cannot send this batch.'
           : 'Shopify delivery could not be confirmed. Refresh to check the batch.';
@@ -166,11 +211,11 @@ export async function pushInventoryBatches(
 }
 
 export function inventoryEventSources(location: Location, events: InventoryEvent[], signal: AbortSignal) {
-  return readEventSources(connection(location,signal),location.facilityId,events);
+  return readEventSources(inventoryConnection(location,signal),location.facilityId,events);
 }
 
 export async function proposedVariances(location: Location, signal: AbortSignal, productId?: string) {
-  const oms = connection(location,signal);
+  const oms = inventoryConnection(location,signal);
   const pageSize = 20;
   const awaitingApproval = 'CYCLE_CNT_CMPLTD';
   const counts = new Map<string, OmsRow>();
@@ -228,7 +273,7 @@ export async function proposedVariances(location: Location, signal: AbortSignal,
     .map(({product})=>product.hotWaxProductId))];
   if (!missingImages.length) return proposals;
 
-  const imageLookup = connection(location,signal);
+  const imageLookup = inventoryConnection(location,signal);
   const requests = [];
   for (let offset = 0; offset < missingImages.length; offset += 200) {
     requests.push(productSearchDetails(missingImages.slice(offset,offset+200),{
@@ -298,6 +343,7 @@ function readEvent(row: OmsRow): InventoryEvent {
     source:text(row.eventTypeDescription || row.eventTypeId),
     state:message ? states[status] || 'Assigned' : 'Pending',
     messageId:message,messageType:text(row.systemMessageTypeId),messageAt:Number(row.systemMessageInitDate ?? row.createdDate),
+    reset:row.resetInventoryLevel==='Y',
     syncedAt:message && status==='SmsgSent' && row.systemMessageProcessedDate!=null
       ? Number(row.systemMessageProcessedDate) : undefined,
   };
@@ -306,7 +352,7 @@ function readEvent(row: OmsRow): InventoryEvent {
 export async function searchInventory(location: Location, query: string, barcode: string, signal: AbortSignal, after?: string) {
   const quoted = JSON.stringify(query.slice(0,120).replace(/\s+/g,' '));
   const filter = barcode ? 'barcode:'+quoted : '('+quoted+' OR sku:'+quoted+' OR barcode:'+quoted+')';
-  const result = await connection(location,signal).postRead('/rest/s1/shopify/graphql',{
+  const result = await inventoryConnection(location,signal).postRead('/rest/s1/shopify/graphql',{
     shopId:location.shopId,
     queryText:`query StoreInventorySearch($after: String, $filter: String!, $location: ID!) {
       productVariants(first: 20, after: $after, query: $filter) {
@@ -336,7 +382,7 @@ export async function inventoryLevel(location: Location, item: Variant, signal: 
   const selection = byItem
     ? '... on InventoryItem { id '+LEVELS+' variant { '+DETAIL_VARIANT_FIELDS+' } }'
     : '... on ProductVariant { '+DETAIL_VARIANT_FIELDS+' inventoryItem { id '+LEVELS+' } }';
-  const result = await connection(location,signal).postRead('/rest/s1/shopify/graphql',{
+  const result = await inventoryConnection(location,signal).postRead('/rest/s1/shopify/graphql',{
     shopId:location.shopId,
     queryText:'query StoreInventory($id: ID!, $location: ID!) { node(id: $id) { '+selection+' } }',
     variables:{id,location:'gid://shopify/Location/'+location.locationId},
@@ -390,7 +436,7 @@ async function reservedQuantity(oms: OmsConnection, item: StockItem) {
 export async function shopifyVariantForHotWaxProduct(location: Location, product: Variant, signal: AbortSignal) {
   const productId = text(product.hotWaxProductId);
   const query = new URLSearchParams({shopId:location.shopId,pageSize:'2'});
-  const result = await connection(location,signal).get<unknown>(
+  const result = await inventoryConnection(location,signal).get<unknown>(
     '/rest/s1/sob/products/'+validId(productId)+'/shopifyShopProducts?'+query,
   );
   const matches = rows(result);
@@ -409,7 +455,7 @@ export async function shopifyVariantForHotWaxProduct(location: Location, product
 }
 
 export async function hotWaxProductForVariant(location: Location, variantId: string, itemId: string | undefined, signal: AbortSignal) {
-  const oms = connection(location,signal);
+  const oms = inventoryConnection(location,signal);
   type Mapping = {shopId: string; shopifyProductId: string; shopifyInventoryItemId: string; productId: string};
   const {shopifyShopProducts} = await oms.graphqlRead<{shopifyShopProducts: GraphPage<Mapping>}>(`query StoreVariantMapping($filter: String!) {
     shopifyShopProducts(first: 2, query: $filter) {
@@ -427,7 +473,7 @@ export async function hotWaxProductForVariant(location: Location, variantId: str
 }
 
 export async function hotWaxInventoryLevel(location: Location, productId: string, signal: AbortSignal): Promise<HotWaxLevel> {
-  const oms = connection(location,signal);
+  const oms = inventoryConnection(location,signal);
   type FacilityStock = {productId: string; facilityId: string; inventoryItem: StockItem | null};
   const {productFacilities} = await oms.graphqlRead<{productFacilities: GraphPage<FacilityStock>}>(`query StoreFacilityStock($filter: String!) {
     productFacilities(first: 2, query: $filter) {

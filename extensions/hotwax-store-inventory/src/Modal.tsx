@@ -4,13 +4,15 @@ import {useEffect, useRef, useState} from 'preact/hooks';
 import {inventoryScope, sameInventoryScope, type InventoryScope} from '../../../shared/store-inventory';
 import {
   hotWaxInventoryLevel, hotWaxProductForVariant, inventoryEventSources, inventoryLevel, inventoryLocation,
-  proposedVariances, pushInventoryBatches, queuedInventoryBatches, recentInventoryEvents, searchInventory, shopifyVariantForHotWaxProduct,
+  productSyncEvents, proposedVariances, pushInventoryBatches, queuedInventoryBatches, recentInventoryEvents,
+  searchInventory, shopifyVariantForHotWaxProduct,
   type HotWaxLevel, type InventoryEvent, type ProposedVariance, type Variant,
 } from './Inventory';
 import {eventSourceKey, type EventSource} from './InventoryEventSources';
+import {projectShopify, recentStoreSales, type StoreSales} from './InventoryProjection';
 
 type Location = Awaited<ReturnType<typeof inventoryLocation>>;
-type HistoryTab = 'events' | 'proposals';
+type HistoryTab = 'events' | 'proposals' | 'sales';
 type ProductPage = {owner: string; product: Variant; tab?: HistoryTab};
 const SEARCH_SCREEN = 'StoreInventorySearch';
 const PRODUCT_SCREEN = 'StoreInventoryProduct';
@@ -27,13 +29,6 @@ function scopeKey() {
   try {return JSON.stringify(currentScope());} catch {return '';}
 }
 
-function timeAt(value: number, timeZone?: string) {
-  if (!Number.isFinite(value) || value<=0) return '';
-  const options: Intl.DateTimeFormatOptions = {month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'};
-  try {return new Intl.DateTimeFormat(undefined,{...options,timeZone}).format(value);}
-  catch {return new Intl.DateTimeFormat(undefined,options).format(value);}
-}
-
 function duration(milliseconds: number) {
   const seconds = Math.max(0,Math.floor(milliseconds/1000));
   const minutes = Math.floor(seconds/60);
@@ -43,6 +38,10 @@ function duration(milliseconds: number) {
   if (hours) return hours+'h'+(minutes%60 ? ' '+minutes%60+'m' : '');
   if (minutes) return minutes+'m'+(seconds%60 ? ' '+seconds%60+'s' : '');
   return seconds+'s';
+}
+
+function ago(value: number, now: number) {
+  return now-value<1000 ? 'just now' : duration(now-value)+' ago';
 }
 
 function useNow() {
@@ -169,21 +168,25 @@ function InventoryHome({scope,owner}: {scope: InventoryScope; owner: string}) {
 type Store = ReturnType<typeof useStoreLocation>;
 type ListFilter = {id?: string; loading: boolean; error?: string};
 
-function InventoryHistory({store,openProduct,initialTab='events',itemFilter,productFilter,productImageUrl,pushScope}: {
+type SalesRead = {data?: StoreSales; error?: string; loading: boolean};
+
+function InventoryHistory({store,openProduct,initialTab='events',itemFilter,productFilter,productImageUrl,pushScope,sales}: {
   store: Store; openProduct?: (product: Variant,tab: HistoryTab) => void;
   initialTab?: HistoryTab; itemFilter?: ListFilter; productFilter?: ListFilter; productImageUrl?: string;
   pushScope?: InventoryScope;
+  sales?: SalesRead;
 }) {
   const [tab,setTab] = useState(initialTab);
   return <s-section heading="Inventory changes">
     <s-button slot="secondary-actions" variant="secondary" disabled={!store.connected} onClick={store.refreshLocation}>Refresh</s-button>
     <s-tabs value={tab} onChange={event=>{
       const value = event.currentTarget.value;
-      if (value==='events' || value==='proposals') setTab(value);
+      if (value==='events' || value==='proposals' || (value==='sales' && sales)) setTab(value);
     }}>
       <s-tab-list>
         <s-tab controls="events">Events</s-tab>
         <s-tab controls="proposals">Proposed variances</s-tab>
+        {sales && <s-tab controls="sales">POS sales</s-tab>}
       </s-tab-list>
       <s-tab-panel id="events">
         {tab==='events' && <InventoryEventList store={store} filter={itemFilter} openProduct={openProduct}
@@ -192,8 +195,36 @@ function InventoryHistory({store,openProduct,initialTab='events',itemFilter,prod
       <s-tab-panel id="proposals">
         {tab==='proposals' && <ProposedVarianceList store={store} filter={productFilter} openProduct={openProduct} productImageUrl={productImageUrl}/>}
       </s-tab-panel>
+      {sales && <s-tab-panel id="sales">
+        {tab==='sales' && <PendingSales sales={sales} connected={store.connected}/>}
+      </s-tab-panel>}
     </s-tabs>
   </s-section>;
+}
+
+function PendingSales({sales,connected}: {sales: SalesRead; connected: boolean}) {
+  const now = useNow();
+  const [visibleCount,setVisibleCount] = useState(EVENT_ROWS_PER_PAGE);
+  const data = sales.data;
+  return <s-stack direction="block" gap="small" paddingBlock="base">
+    {connected && sales.loading && <Loading label="Checking POS orders…"/>}
+    {sales.error && <s-banner tone="warning" heading="POS orders unavailable">{sales.error}</s-banner>}
+    {data && <>
+      <s-text type="strong">{data.pending.length} of {data.orderCount} POS orders awaiting HotWax import</s-text>
+      <s-text type="small" color="subdued">Created in the hour before the check · Checked {ago(data.checkedAt,now)}</s-text>
+      {data.pending.slice(0,visibleCount).map(order=>{
+        const impact = order.impact;
+        const change = impact && (impact.atp || impact.onHand)
+          ? 'ATP −'+impact.atp+' · On hand −'+impact.onHand : 'No change for this product';
+        return <Row key={order.id} title={order.name} state={order.cancelled?'Cancelled':'Awaiting import'}
+          detail={order.cancelled ? undefined : impact ? change : 'Product quantity unavailable'}
+          timing={'Created '+ago(order.createdAt,now)}/>;
+      })}
+      {visibleCount < data.pending.length && <s-stack direction="inline">
+        <s-button variant="secondary" onClick={()=>setVisibleCount(count=>count+EVENT_ROWS_PER_PAGE)}>Load more</s-button>
+      </s-stack>}
+    </>}
+  </s-stack>;
 }
 
 function InventoryEventList({store,filter,openProduct,productImageUrl,pushScope}: {
@@ -484,6 +515,10 @@ function ProductDetail({scope,selected,initialTab}: {scope: InventoryScope; sele
   const [hotWax,setHotWax] = useState<HotWaxLevel>();
   const [readingHotWax,setReadingHotWax] = useState(false);
   const [hotWaxError,setHotWaxError] = useState('');
+  const [shopifyProjection,setShopifyProjection] = useState<ReturnType<typeof projectShopify>>();
+  const [shopifyProjectionError,setShopifyProjectionError] = useState('');
+  const [sales,setSales] = useState<SalesRead>({loading:true});
+  const now = useNow();
   const product = snapshot?.product ?? selected;
   const level = snapshot?.level;
   const variantId = selected.variantId ?? snapshot?.product.variantId;
@@ -547,10 +582,43 @@ function ProductDetail({scope,selected,initialTab}: {scope: InventoryScope; sele
     return ()=>controller.abort();
   },[productId,location,connected]);
 
+  useEffect(()=>{
+    setShopifyProjection(undefined);
+    setShopifyProjectionError('');
+    if (!location || !connected || !itemId || !level || reading) return;
+    const controller = new AbortController();
+    productSyncEvents(location,itemId,controller.signal)
+      .then(events=>{
+        if (!controller.signal.aborted) setShopifyProjection(projectShopify(level,events));
+      })
+      .catch(cause=>{
+        if (!controller.signal.aborted) setShopifyProjectionError(
+          errorText(cause,'Shopify projection is unavailable while the inventory queue cannot be verified.'),
+        );
+      });
+    return ()=>controller.abort();
+  },[location,connected,itemId,level,reading]);
+
+  useEffect(()=>{
+    if (!location || !connected) return;
+    const controller = new AbortController();
+    setSales({loading:true});
+    recentStoreSales(location,variantId,controller.signal)
+      .then(data=>{if (!controller.signal.aborted) setSales({data,loading:false});})
+      .catch(cause=>{
+        if (!controller.signal.aborted) setSales({loading:false,error:errorText(cause,'Could not check Shopify POS orders against HotWax.')});
+      });
+    return ()=>controller.abort();
+  },[location,connected,variantId]);
+
   const waitingForProduct = !productId && (readingMapping || (!variantId && reading));
   const productError = mappingError || (!productId && !variantId && !reading ? 'HotWax needs a confirmed product for this item.' : '');
   const loadingHotWax = connected && !locationError && (readingHotWax || waitingForProduct || !location);
   const unavailableHotWax = hotWaxError || locationError || productError;
+  const afterSales = sales.data?.impact;
+  const projectedAtp = hotWax?.atp!=null && afterSales && variantId ? hotWax.atp-afterSales.atp : null;
+  const projectedQoh = hotWax?.onHand!=null && afterSales && variantId ? hotWax.onHand-afterSales.onHand : null;
+  const checkingShopifyProjection = connected && Boolean(itemId) && !shopifyProjection && !shopifyProjectionError;
 
   return <s-page heading="Product details" subheading={location?.name}>
     <s-scroll-box>
@@ -578,11 +646,12 @@ function ProductDetail({scope,selected,initialTab}: {scope: InventoryScope; sele
                     </s-banner>}
                     {level && <>
                       <s-stack direction="inline">
-                        <Quantity label="Available" value={level.available}/>
-                        <Quantity label="On hand" value={level.onHand}/>
+                        <Quantity label="Available" value={level.available} projected={shopifyProjection?.available ?? null} projecting={checkingShopifyProjection}/>
+                        <Quantity label="On hand" value={level.onHand} projected={shopifyProjection?.onHand ?? null} projecting={checkingShopifyProjection}/>
                         <Quantity label="Committed" value={level.committed}/>
                       </s-stack>
-                      <s-text type="small" color="subdued">Checked {timeAt(level.checkedAt,location?.timeZone)}</s-text>
+                      {shopifyProjectionError && <s-text type="small" color="subdued">{shopifyProjectionError}</s-text>}
+                      <s-text type="small" color="subdued">Checked {ago(level.checkedAt,now)} · To be after Shopify sync</s-text>
                     </>}
                   </s-stack>
                   <s-divider/>
@@ -592,11 +661,12 @@ function ProductDetail({scope,selected,initialTab}: {scope: InventoryScope; sele
                     {unavailableHotWax && <s-banner tone="warning" heading="HotWax quantities unavailable">{unavailableHotWax}</s-banner>}
                     {hotWax && <>
                       <s-stack direction="inline">
-                        <Quantity label="ATP" value={hotWax.atp}/>
-                        <Quantity label="On hand (QOH)" value={hotWax.onHand}/>
+                        <Quantity label="ATP" value={hotWax.atp} projected={projectedAtp} projecting={sales.loading && connected}/>
+                        <Quantity label="On hand (QOH)" value={hotWax.onHand} projected={projectedQoh} projecting={sales.loading && connected}/>
                         <Quantity label="Reservations" value={hotWax.reservations}/>
                       </s-stack>
-                      <s-text type="small" color="subdued">Checked {timeAt(hotWax.checkedAt,location?.timeZone)}</s-text>
+                      <s-text type="small" color="subdued">Checked {ago(hotWax.checkedAt,now)} · To be after POS imports</s-text>
+                      {!sales.loading && !afterSales && <s-text type="small" color="subdued">See POS sales for the import check.</s-text>}
                     </>}
                   </s-stack>
                 </s-stack>
@@ -604,6 +674,7 @@ function ProductDetail({scope,selected,initialTab}: {scope: InventoryScope; sele
             </s-box>
           </s-stack>
           <InventoryHistory store={store} initialTab={initialTab} productImageUrl={product.imageUrl} pushScope={scope}
+            sales={locationError ? {loading:false,error:locationError} : sales}
             itemFilter={{id:itemId,loading:!itemId && reading,error:itemId ? undefined : detailError}}
             productFilter={{id:productId,loading:waitingForProduct,error:productError}}/>
           <s-section heading="Inventory actions">
@@ -636,10 +707,13 @@ function Loading({label}: {label: string}) {
   </s-stack>;
 }
 
-function Quantity({label,value}: {label: string; value: number | null}) {
+function Quantity({label,value,projected,projecting}: {
+  label: string; value: number | null; projected?: number | null; projecting?: boolean;
+}) {
   return <s-stack direction="block" gap="small-300" inlineSize="33.33%">
     <s-text type="small" color="subdued">{label}</s-text>
     <s-heading>{units(value)}</s-heading>
+    {projected!==undefined && <s-text type="small">To be {projecting?'…':projected ?? '—'}</s-text>}
   </s-stack>;
 }
 
