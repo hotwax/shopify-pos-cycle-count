@@ -3,7 +3,6 @@ import {render} from 'preact';
 import {useEffect, useRef, useState} from 'preact/hooks';
 import {availableTarget, commitInventoryReview, INVENTORY_OMS, inventoryScope, sameInventoryScope} from '../../../shared/store-inventory';
 import type {InventoryDetail, InventoryEffect, InventoryOperation, InventoryProduct, InventoryReview, InventoryScope} from '../../../shared/store-inventory';
-import {getShopOmsUrl} from '../../../shared/oms-shop-config';
 
 type Access = {accessToken: string; locationName: string; timeZone?: string; canPush: boolean; canSet: boolean};
 type ProductPage = {items: InventoryProduct[]; cursor?: string | null};
@@ -81,7 +80,6 @@ function Workspace({scope}: {scope: InventoryScope}) {
   const [listError,setListError] = useState('');
   const inFlight = useRef(false);
   const alive = useRef(true);
-  const configured = useRef(false);
   const [refresh,setRefresh] = useState(0);
   const ownerKey = 'store-inventory:last-operation:' + [scope.shopId,scope.locationId,scope.userId,scope.staffId].join(':');
 
@@ -107,11 +105,7 @@ function Workspace({scope}: {scope: InventoryScope}) {
     assertScope();
     const timeout = AbortSignal.timeout(22000);
     const requestSignal = signal ? AbortSignal.any([signal,timeout]) : timeout;
-    if (!configured.current) {
-      const origin = await getShopOmsUrl(requestSignal);
-      if (origin !== INVENTORY_OMS) throw new Error('Set the app connection to Gorjana Maarg UAT.');
-      configured.current = true;
-    }
+    // This extension is sandbox-only. The UAT endpoint also verifies the app and shop on every request.
     const shopifySessionToken = await shopify.session.getSessionToken();
     if (!shopifySessionToken) throw new Error('Shopify could not authorize this app. Reopen Store inventory.');
     assertScope();
