@@ -62,6 +62,7 @@ function Extension() {
 
 function Workspace({scope}: {scope: InventoryScope}) {
   const [session,setSession] = useState<Access | null>(null);
+  const [showAccessDetails,setShowAccessDetails] = useState(false);
   const [connected,setConnected] = useState(shopify.connectivity.current.value.internetConnected === 'Connected');
   const [screen,setScreen] = useState<Screen>('list');
   const [items,setItems] = useState<InventoryProduct[]>([]);
@@ -277,6 +278,15 @@ function Workspace({scope}: {scope: InventoryScope}) {
       <s-text>Use your HotWax inventory access code for this location.</s-text>
       {!connected && <s-banner tone="warning" heading="POS is offline"/>}
       <s-button variant="primary" disabled={!connected} onClick={signIn}>Enter access code</s-button>
+      <s-button variant="secondary" onClick={()=>setShowAccessDetails(shown=>!shown)}>
+        {showAccessDetails ? 'Hide access details' : 'Access details'}
+      </s-button>
+      {showAccessDetails && <s-stack direction="block" gap="small">
+        <s-text color="subdued">Share these references with the HotWax administrator who issues your access code.</s-text>
+        <s-text>Shopify location {scope.locationId}</s-text>
+        <s-text>Shopify account {scope.userId}</s-text>
+        <s-text>POS staff {scope.staffId}</s-text>
+      </s-stack>}
     </s-stack>
   </s-section>;
 
