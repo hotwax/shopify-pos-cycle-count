@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {inventoryScope, sameInventoryScope, availableTarget, commitInventoryReview} from '../shared/store-inventory';
+import {inventoryScope, sameInventoryScope, availableTarget, commitInventoryReview, mustRecoverInventoryOperation} from '../shared/store-inventory';
 
 const register = {shopDomain: 'gorjana-sandbox.myshopify.com', shopId: 7, locationId: 9, userId: 11, staffId: 13};
 const scope = inventoryScope(register);
@@ -38,4 +38,33 @@ test('a failure to remember the operation prevents a write', async () => {
     commit: async () => {assert.fail('commit must wait for storage');},
     status: async () => {assert.fail('status must wait for storage');}
   }), /Storage unavailable/);
+});
+
+test('an interrupted save keeps the original reference until status or retry resolves it', async () => {
+  const events: string[] = [];
+  const transport = {
+    remember: async (id: string) => {events.push('remember ' + id);},
+    commit: async (id: string) => {events.push('commit ' + id); throw new Error('Connection lost');},
+    status: async (id: string) => {events.push('status ' + id); throw new Error('Still offline');},
+  };
+  const unknown = await commitInventoryReview('review-1', transport);
+  assert.deepEqual(unknown, {operationId: 'review-1', state: 'unknown'});
+  assert.equal(mustRecoverInventoryOperation(unknown), true);
+
+  const recovered = await commitInventoryReview(unknown.operationId, {
+    ...transport,
+    status: async id => ({operationId: id, state: 'review'} as const),
+  });
+  assert.equal(mustRecoverInventoryOperation(recovered), true);
+
+  const saved = await commitInventoryReview(recovered.operationId, {
+    ...transport,
+    commit: async id => ({operationId: id, state: 'saved'} as const),
+  });
+  assert.equal(mustRecoverInventoryOperation(saved), false);
+  assert.deepEqual(saved, {operationId: 'review-1', state: 'saved'});
+  assert.deepEqual(events, [
+    'remember review-1','commit review-1','status review-1',
+    'remember review-1','commit review-1','remember review-1',
+  ]);
 });

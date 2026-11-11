@@ -58,14 +58,19 @@ export type InventoryDetail = InventoryProduct & {
 export type InventoryReview = {
   operationId: string; action: 'push' | 'set'; currentAvailable: number;
   targetAvailable: number; currentAtp: number; variance: number;
-  onHandVariance?: number; committed: number; effects: InventoryEffect[];
+  onHandVariance?: number; committed: number | null; unavailable?: number | null; effects: InventoryEffect[];
 };
 
 export type InventoryOperation = {
   operationId: string; action?: 'push' | 'set';
   state: 'review' | 'expired' | 'queued' | 'saved' | 'sending' | 'needsAttention' | 'confirmed' | 'unknown';
   targetAvailable?: number; confirmedAt?: string; message?: string; canRetry?: boolean;
+  lastConfirmed?: {available: number; checkedAt?: string | null} | null; outcomeNote?: string | null;
 };
+
+export function mustRecoverInventoryOperation(operation: InventoryOperation | null): boolean {
+  return operation?.state === 'unknown' || operation?.state === 'review';
+}
 
 type CommitTransport<T> = {
   remember(id: string): Promise<void>;

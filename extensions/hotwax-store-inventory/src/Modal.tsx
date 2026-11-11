@@ -1,7 +1,7 @@
 import '@shopify/ui-extensions/preact';
 import {render} from 'preact';
 import {useEffect, useRef, useState} from 'preact/hooks';
-import {availableTarget, commitInventoryReview, INVENTORY_OMS, inventoryScope, sameInventoryScope} from '../../../shared/store-inventory';
+import {availableTarget, commitInventoryReview, INVENTORY_OMS, inventoryScope, mustRecoverInventoryOperation, sameInventoryScope} from '../../../shared/store-inventory';
 import type {InventoryDetail, InventoryEffect, InventoryOperation, InventoryProduct, InventoryReview, InventoryScope} from '../../../shared/store-inventory';
 
 type Access = {accessToken: string; locationName: string; timeZone?: string; canPush: boolean; canSet: boolean};
@@ -19,6 +19,12 @@ const operationStates = {
   review:'Review still open',expired:'Review expired',queued:'Queued for Shopify',saved:'Saved in HotWax',
   sending:'Sending to Shopify',needsAttention:'Shopify needs attention',confirmed:'Shopify confirmed',unknown:'Checking update status',
 };
+
+class InventoryRequestError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+  }
+}
 
 function currentScope() {
   return inventoryScope({...shopify.session.currentSession, staffId: shopify.session.staffMember.value?.id});
@@ -70,6 +76,7 @@ function Workspace({scope}: {scope: InventoryScope}) {
   const [operation,setOperation] = useState<InventoryOperation | null>(null);
   const [input,setInput] = useState('');
   const [search,setSearch] = useState('');
+  const [scannedBarcode,setScannedBarcode] = useState<string | null>(null);
   const [cursor,setCursor] = useState<string | null>(null);
   const [quantity,setQuantity] = useState('');
   const [reason,setReason] = useState('');
@@ -82,6 +89,9 @@ function Workspace({scope}: {scope: InventoryScope}) {
   const alive = useRef(true);
   const [refresh,setRefresh] = useState(0);
   const ownerKey = 'store-inventory:last-operation:' + [scope.shopId,scope.locationId,scope.userId,scope.staffId].join(':');
+  const catalogSearch = scannedBarcode ?? search;
+  const recoverOperation = mustRecoverInventoryOperation(operation);
+  const operationNote = operation?.lastConfirmed ? operation.outcomeNote : operation?.message;
 
   useEffect(() => () => {alive.current=false;}, []);
   useEffect(() => shopify.connectivity.current.subscribe(state => setConnected(state.internetConnected === 'Connected')), []);
@@ -119,7 +129,7 @@ function Workspace({scope}: {scope: InventoryScope}) {
     assertScope();
     if (result.error) {
       if (result.error === 'ACCESS_EXPIRED') setSession(null);
-      throw new Error(result.message || 'HotWax could not complete the request.');
+      throw new InventoryRequestError(result.error, result.message || 'HotWax could not complete the request.');
     }
     if (!result.inventoryResponse) throw new Error('HotWax returned an incomplete inventory response.');
     return result.inventoryResponse;
@@ -129,13 +139,15 @@ function Workspace({scope}: {scope: InventoryScope}) {
     shopify.pinPad.showPinPad(async digits => {
       try {
         const access = await request('signIn',{code:digits.join('')});
+        const operationId = await shopify.storage.get(ownerKey);
+        assertScope();
         setError('');
+        setOperation(typeof operationId === 'string' ? {operationId,state:'unknown'} : null);
         setSession(access);
-        const operationId = await shopify.storage.get(ownerKey).catch(() => null);
-        if (typeof operationId === 'string' && alive.current) {
-          request('status',{operationId},undefined,access.accessToken)
+        if (typeof operationId === 'string') {
+          status(operationId,undefined,access.accessToken)
             .then(result=>{if(alive.current)setOperation(result);})
-            .catch(()=>{if(alive.current)setOperation({operationId,state:'unknown'});});
+            .catch(()=>{});
         }
         return {result:'accept'};
       } catch (cause) {
@@ -151,12 +163,12 @@ function Workspace({scope}: {scope: InventoryScope}) {
     setListError('');
     setItems([]);
     setCursor(null);
-    request(search ? 'search' : 'queue',{search},controller.signal)
+    request(catalogSearch ? 'search' : 'queue',{search:catalogSearch,barcode:scannedBarcode !== null},controller.signal)
       .then(result=>{if(!controller.signal.aborted){setItems(result.items);setCursor(result.cursor ?? null);}})
       .catch(cause=>{if(!controller.signal.aborted)setListError(cause.message);})
       .finally(()=>{if(!controller.signal.aborted)setLoading(false);});
     return () => controller.abort();
-  }, [session,connected,screen,search,refresh]);
+  }, [session,connected,screen,catalogSearch,scannedBarcode,refresh]);
 
   async function run(task: () => Promise<void>) {
     if (inFlight.current) return;
@@ -187,6 +199,7 @@ function Workspace({scope}: {scope: InventoryScope}) {
         setDetail(await request('detail',{itemId:result.items[0].itemId}));
         setQuantity('');setReason('');setNote('');setReview(null);setScreen('detail');
       } else {
+        setScannedBarcode(code);
         setInput(code);
         setSearch(code);
         setRefresh(value=>value+1);
@@ -214,6 +227,7 @@ function Workspace({scope}: {scope: InventoryScope}) {
   function preview(action: 'push' | 'set') {
     return run(async () => {
       if (!detail) return;
+      if (recoverOperation) throw new Error('Check the previous update before starting a new review.');
       const payload: Record<string, unknown> = {itemId:detail.itemId,mode:action};
       if (action === 'set') {
         payload.target = availableTarget(quantity);
@@ -226,20 +240,26 @@ function Workspace({scope}: {scope: InventoryScope}) {
     });
   }
 
-  function status(id: string) {
-    return request('status',{operationId:id});
+  async function status(id: string, signal?: AbortSignal, access?: string): Promise<InventoryOperation> {
+    try {
+      return await request('status',{operationId:id},signal,access);
+    } catch (cause) {
+      if (cause instanceof InventoryRequestError && cause.code === 'OPERATION_UNAVAILABLE') {
+        return {operationId:id,state:'expired',message:cause.message};
+      }
+      throw cause;
+    }
   }
 
-  function confirm() {
+  function saveReview(operationId: string) {
     return run(async () => {
-      if (!review) return;
-      const result = await commitInventoryReview(review.operationId, {
+      const result = await commitInventoryReview(operationId, {
         remember:id=>shopify.storage.set(ownerKey,id),
         commit:operationId=>request('commit',{operationId}),
         status,
       });
       setOperation(result);
-      if (result.state === 'expired') {
+      if (result.state === 'expired' && review?.operationId === operationId) {
         setError(result.message || 'The inventory review expired. Review the current values.');
         setScreen(review.action === 'set' ? 'edit' : 'detail');
       } else {
@@ -260,7 +280,7 @@ function Workspace({scope}: {scope: InventoryScope}) {
     if (screen !== 'status' || !session || !connected || !operation || !['queued','saved','sending','unknown'].includes(operation.state)) return;
     const controller=new AbortController();
     const timer=setTimeout(()=>{
-      request('status',{operationId:operation.operationId},controller.signal)
+      status(operation.operationId,controller.signal)
         .then(result=>{if(!controller.signal.aborted)setOperation(result);})
         .catch(()=>{if(!controller.signal.aborted)setOperation({...operation,state:'unknown'});});
     }, 2500);
@@ -293,7 +313,10 @@ function Workspace({scope}: {scope: InventoryScope}) {
     {error && <s-banner tone="critical" heading={error}/>}
     {screen === 'list' && <>
       <s-section heading="Find a product"><s-stack direction="block" gap="base">
-        <s-text-field label="Search the catalog" placeholder="Name, SKU or barcode" value={input} onInput={e=>setInput(e.currentTarget.value ?? '')}/>
+        <s-text-field label="Search the catalog" placeholder="Name, SKU or barcode" value={input} onInput={e=>{
+          setScannedBarcode(null);
+          setInput(e.currentTarget.value ?? '');
+        }}/>
         <s-text color="subdued">Use a connected barcode scanner or search the catalog.</s-text>
         <s-stack direction="inline" gap="base">
           <s-button disabled={!connected || busy} onClick={()=>shopify.scanner.showCameraScanner()}>Scan with camera</s-button>
@@ -303,12 +326,12 @@ function Workspace({scope}: {scope: InventoryScope}) {
       {operation && <s-section heading="Recent update">
         <s-button disabled={busy} onClick={()=>setScreen('status')}>{operationStates[operation.state]} · {operation.operationId}</s-button>
       </s-section>}
-      <s-section heading={search ? 'Catalog results' : 'Inventory queue'}>
+      <s-section heading={scannedBarcode ? 'Barcode matches' : catalogSearch ? 'Catalog results' : 'Inventory queue'}>
         <s-stack direction="block" gap="base">
           {listError && <s-banner tone="warning" heading={listError}/>}
-          {loading && <s-spinner accessibilityLabel={search ? 'Finding products' : 'Loading inventory queue'}/>}
+          {loading && <s-spinner accessibilityLabel={catalogSearch ? 'Finding products' : 'Loading inventory queue'}/>}
           {!loading && !listError && connected && items.length === 0 &&
-            <s-text color="subdued">{search ? 'No products match this search.' : 'No events are waiting to reach Shopify at this location.'}</s-text>}
+            <s-text color="subdued">{catalogSearch ? 'No products match this search.' : 'No events are waiting to reach Shopify at this location.'}</s-text>}
           {items.map(item=><s-clickable key={item.itemId} disabled={busy || !connected} onClick={()=>openProduct(item.itemId)}>
             <s-box padding="base" minBlockSize="64px"><s-stack direction="inline" alignItems="center" justifyContent="space-between" gap="base">
               <s-stack direction="block" gap="small"><s-text type="strong">{item.title}</s-text><s-text color="subdued">{titleFor(item)}</s-text>
@@ -319,7 +342,7 @@ function Workspace({scope}: {scope: InventoryScope}) {
             </s-stack></s-box>
           </s-clickable>)}
           {cursor && <s-button disabled={busy || loading || !connected} onClick={()=>run(async()=>{
-            const result=await request(search?'search':'queue',{search,cursor});
+            const result=await request(catalogSearch?'search':'queue',{search:catalogSearch,barcode:scannedBarcode !== null,cursor});
             setItems(previous=>[...previous,...result.items.filter(item=>!previous.some(p=>p.itemId===item.itemId))]);
             setCursor(result.cursor??null);
           })}>Load more</s-button>}
@@ -340,10 +363,11 @@ function Workspace({scope}: {scope: InventoryScope}) {
         {detail.events.length ? <Events rows={detail.events} zone={session.timeZone}/> : <s-text>No pending events for this variant at this location.</s-text>}
       </s-section>
       <s-section heading="Inventory actions"><s-stack direction="block" gap="base">
+        {recoverOperation && <s-button disabled={busy} onClick={()=>setScreen('status')}>Check previous update</s-button>}
         {detail.pushBlocked && <s-text color="subdued">{detail.pushBlocked}</s-text>}
-        <s-button variant="primary" disabled={busy || !connected || !session.canPush || Boolean(detail.pushBlocked)} onClick={()=>preview('push')}>Review push now</s-button>
+        <s-button variant="primary" disabled={busy || !connected || recoverOperation || !session.canPush || Boolean(detail.pushBlocked)} onClick={()=>preview('push')}>Review push now</s-button>
         {detail.setBlocked && <s-text color="subdued">{detail.setBlocked}</s-text>}
-        <s-button disabled={busy || !connected || !session.canSet || Boolean(detail.setBlocked)} onClick={()=>setScreen('edit')}>
+        <s-button disabled={busy || !connected || recoverOperation || !session.canSet || Boolean(detail.setBlocked)} onClick={()=>setScreen('edit')}>
           {detail.events.length ? 'Discard and set' : 'Set available'}
         </s-button>
       </s-stack></s-section>
@@ -366,12 +390,12 @@ function Workspace({scope}: {scope: InventoryScope}) {
       <s-stack direction="block" gap="base">
         <s-text type="strong">{detail.title} · {titleFor(detail)}</s-text>
         <s-text>Shopify available {review.currentAvailable} → {review.targetAvailable}</s-text>
-        <s-text>Shopify committed {review.committed}</s-text>
+        <s-text>Shopify committed {units(review.committed)} · Other unavailable {units(review.unavailable ?? null)}</s-text>
         {review.action==='set' && <>
           <s-text>HotWax facility ATP {review.currentAtp} → {review.targetAvailable}</s-text>
           <s-text type="strong">HotWax variance {signed(review.variance)} units</s-text>
           {review.onHandVariance!=null && <s-text>HotWax on-hand variance {signed(review.onHandVariance)} units</s-text>}
-          <s-text>HotWax saves the variance and requests one Shopify reset for this item.</s-text>
+          <s-text>{review.variance === 0 ? 'HotWax requests one Shopify reset for this item.' : 'HotWax saves the variance and requests one Shopify reset for this item.'}</s-text>
         </>}
         {review.effects.length > 0 && <>
           <s-text type="strong">{review.action==='push'?'Effects to send':'Pending effects to discard'}</s-text>
@@ -379,7 +403,7 @@ function Workspace({scope}: {scope: InventoryScope}) {
         </>}
         <s-stack direction="inline" gap="base">
           <s-button disabled={busy} onClick={()=>setScreen(review.action==='set'?'edit':'detail')}>Back</s-button>
-          <s-button variant="primary" disabled={busy || !connected} onClick={confirm}>{review.action==='push'?'Push now':'Set Shopify available to '+review.targetAvailable}</s-button>
+          <s-button variant="primary" disabled={busy || !connected || recoverOperation} onClick={()=>saveReview(review.operationId)}>{review.action==='push'?'Push now':'Set Shopify available to '+review.targetAvailable}</s-button>
         </s-stack>
       </s-stack>
     </s-section>}
@@ -389,10 +413,14 @@ function Workspace({scope}: {scope: InventoryScope}) {
         {operation.action==='set' && ['saved','sending','needsAttention','confirmed'].includes(operation.state) &&
           <s-text>Saved in HotWax</s-text>}
         {operation.state==='confirmed' && <s-text>{operation.targetAvailable} available · Confirmed {timeAt(operation.confirmedAt,session.timeZone)}</s-text>}
-        {operation.message && <s-text>{operation.message}</s-text>}
+        {operation.lastConfirmed && <s-text>Last confirmed Shopify available {operation.lastConfirmed.available}
+          {operation.lastConfirmed.checkedAt && ' · Checked '+timeAt(operation.lastConfirmed.checkedAt,session.timeZone)}</s-text>}
+        {operationNote && <s-text>{operationNote}</s-text>}
         <s-stack direction="inline" gap="base">
           <s-button disabled={busy} onClick={()=>setScreen('list')}>Back to inventory</s-button>
           <s-button disabled={busy || !connected} onClick={reloadOperation}>Check status</s-button>
+          {operation.state==='review' && ((operation.action==='set' && session.canSet) || (operation.action==='push' && session.canPush)) &&
+            <s-button disabled={busy || !connected} onClick={()=>saveReview(operation.operationId)}>Retry save</s-button>}
           {operation.canRetry && <s-button disabled={busy || !connected} onClick={()=>run(async()=>{
             setOperation(await request('retry',{operationId:operation.operationId}));
           })}>Retry Shopify delivery</s-button>}
