@@ -4,11 +4,11 @@ import {useEffect, useRef, useState} from 'preact/hooks';
 import {availableTarget, commitInventoryReview, INVENTORY_OMS, inventoryScope, mustRecoverInventoryOperation, sameInventoryScope} from '../../../shared/store-inventory';
 import type {InventoryDetail, InventoryEffect, InventoryOperation, InventoryProduct, InventoryReview, InventoryScope} from '../../../shared/store-inventory';
 
-type Access = {accessToken: string; locationName: string; timeZone?: string; canPush: boolean; canSet: boolean};
+type Access = {locationName: string; timeZone?: string; canPush: boolean; canSet: boolean};
 type ProductPage = {items: InventoryProduct[]; cursor?: string | null};
 type Screen = 'list' | 'detail' | 'edit' | 'review' | 'status';
 type Responses = {
-  signIn: Access; queue: ProductPage; search: ProductPage; detail: InventoryDetail;
+  access: Access; queue: ProductPage; search: ProductPage; detail: InventoryDetail;
   preview: InventoryReview; commit: InventoryOperation; status: InventoryOperation; retry: InventoryOperation;
 };
 
@@ -59,15 +59,18 @@ function Extension() {
     const timer = setInterval(check, 1500);
     return () => {unsubscribe();clearInterval(timer);};
   }, []);
+  if (owner) return <Workspace key={owner} scope={JSON.parse(owner)}/>;
   return <s-page heading="Store inventory">
-    {owner ? <Workspace key={owner} scope={JSON.parse(owner)}/> :
-      <s-section><s-banner tone="warning" heading="Open the Gorjana sandbox and pin in to view store inventory."/></s-section>}
+    <s-box padding="large">
+      <s-banner tone="warning" heading="Open the Gorjana sandbox in Shopify POS and pin in to continue."/>
+    </s-box>
   </s-page>;
 }
 
 function Workspace({scope}: {scope: InventoryScope}) {
   const [session,setSession] = useState<Access | null>(null);
-  const [showAccessDetails,setShowAccessDetails] = useState(false);
+  const [accessError,setAccessError] = useState('');
+  const [accessAttempt,setAccessAttempt] = useState(0);
   const [connected,setConnected] = useState(shopify.connectivity.current.value.internetConnected === 'Connected');
   const [screen,setScreen] = useState<Screen>('list');
   const [items,setItems] = useState<InventoryProduct[]>([]);
@@ -82,7 +85,7 @@ function Workspace({scope}: {scope: InventoryScope}) {
   const [reason,setReason] = useState('');
   const [note,setNote] = useState('');
   const [busy,setBusy] = useState(false);
-  const [loading,setLoading] = useState(false);
+  const [loading,setLoading] = useState(true);
   const [error,setError] = useState('');
   const [listError,setListError] = useState('');
   const inFlight = useRef(false);
@@ -110,7 +113,7 @@ function Workspace({scope}: {scope: InventoryScope}) {
   }
 
   async function request<Action extends keyof Responses>(
-    action: Action, payload: Record<string, unknown> = {}, signal?: AbortSignal, access = session?.accessToken,
+    action: Action, payload: Record<string, unknown> = {}, signal?: AbortSignal,
   ): Promise<Responses[Action]> {
     assertScope();
     const timeout = AbortSignal.timeout(22000);
@@ -121,40 +124,47 @@ function Workspace({scope}: {scope: InventoryScope}) {
     assertScope();
     const response = await fetch(endpoint, {
       method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},redirect:'error',
-      body:JSON.stringify({action,locationId:scope.locationId,staffId:scope.staffId,shopifySessionToken,accessToken:access,payload}),
+      body:JSON.stringify({action,locationId:scope.locationId,staffId:scope.staffId,shopifySessionToken,payload}),
       signal:requestSignal,
     });
     if (!response.ok) throw new Error('HotWax could not complete the request. Check the connection and try again.');
     const result = await response.json() as {error?: string; message?: string; inventoryResponse?: Responses[Action]};
     assertScope();
     if (result.error) {
-      if (result.error === 'ACCESS_EXPIRED') setSession(null);
       throw new InventoryRequestError(result.error, result.message || 'HotWax could not complete the request.');
     }
     if (!result.inventoryResponse) throw new Error('HotWax returned an incomplete inventory response.');
     return result.inventoryResponse;
   }
 
-  function signIn() {
-    shopify.pinPad.showPinPad(async digits => {
+  useEffect(() => {
+    if (!connected || session) return;
+    const controller = new AbortController();
+    setAccessError('');
+
+    async function openWorkspace() {
       try {
-        const access = await request('signIn',{code:digits.join('')});
-        const operationId = await shopify.storage.get(ownerKey);
-        assertScope();
-        setError('');
-        setOperation(typeof operationId === 'string' ? {operationId,state:'unknown'} : null);
+        const access = await request('access',{},controller.signal);
+        const rememberedId = await shopify.storage.get(ownerKey);
+        if (controller.signal.aborted) return;
+
+        setOperation(typeof rememberedId === 'string' ? {operationId:rememberedId,state:'unknown'} : null);
         setSession(access);
-        if (typeof operationId === 'string') {
-          status(operationId,undefined,access.accessToken)
-            .then(result=>{if(alive.current)setOperation(result);})
+        if (typeof rememberedId === 'string') {
+          status(rememberedId,controller.signal)
+            .then(result=>{if (!controller.signal.aborted && alive.current) setOperation(result);})
             .catch(()=>{});
         }
-        return {result:'accept'};
       } catch (cause) {
-        return {result:'reject',errorMessage:cause instanceof Error ? cause.message : 'Could not verify access.'};
+        if (!controller.signal.aborted) {
+          setAccessError(cause instanceof Error ? cause.message : 'Could not open Store inventory.');
+        }
       }
-    }, {title:'Store inventory access',label:'Enter your HotWax inventory access code',minPinLength:8,maxPinLength:10,masked:true});
-  }
+    }
+
+    void openWorkspace();
+    return () => controller.abort();
+  }, [connected,accessAttempt]);
 
   useEffect(() => {
     if (!session || !connected || screen !== 'list') return;
@@ -240,9 +250,9 @@ function Workspace({scope}: {scope: InventoryScope}) {
     });
   }
 
-  async function status(id: string, signal?: AbortSignal, access?: string): Promise<InventoryOperation> {
+  async function status(id: string, signal?: AbortSignal): Promise<InventoryOperation> {
     try {
-      return await request('status',{operationId:id},signal,access);
+      return await request('status',{operationId:id},signal);
     } catch (cause) {
       if (cause instanceof InventoryRequestError && cause.code === 'OPERATION_UNAVAILABLE') {
         return {operationId:id,state:'expired',message:cause.message};
@@ -287,156 +297,263 @@ function Workspace({scope}: {scope: InventoryScope}) {
     return ()=>{controller.abort();clearTimeout(timer);};
   }, [screen,operation,session,connected]);
 
-  if (!session) return <s-section heading="Sign in to Store inventory">
-    <s-stack direction="block" gap="base">
-      <s-text>Use your HotWax inventory access code for this location.</s-text>
-      {!connected && <s-banner tone="warning" heading="POS is offline"/>}
-      <s-button variant="primary" disabled={!connected} onClick={signIn}>Enter access code</s-button>
-      <s-button variant="secondary" onClick={()=>setShowAccessDetails(shown=>!shown)}>
-        {showAccessDetails ? 'Hide access details' : 'Access details'}
-      </s-button>
-      {showAccessDetails && <s-stack direction="block" gap="small">
-        <s-text color="subdued">Share these references with the HotWax administrator who issues your access code.</s-text>
-        <s-text>Shopify location {scope.locationId}</s-text>
-        <s-text>Shopify account {scope.userId}</s-text>
-        <s-text>POS staff {scope.staffId}</s-text>
-      </s-stack>}
-    </s-stack>
-  </s-section>;
+  function goTo(next: Screen) {
+    setError('');
+    setScreen(next);
+  }
 
-  return <s-scroll-box><s-stack direction="block" gap="base">
-    <s-section><s-stack direction="inline" gap="base" alignItems="center">
-      <s-text type="strong">{session.locationName}</s-text>
-      {!session.canPush && !session.canSet && <s-badge>View only</s-badge>}
-    </s-stack></s-section>
-    {!connected && <s-banner tone="warning" heading="POS is offline">Reconnect for current quantities and actions.</s-banner>}
-    {error && <s-banner tone="critical" heading={error}/>}
-    {screen === 'list' && <>
-      <s-section heading="Find a product"><s-stack direction="block" gap="base">
-        <s-text-field label="Search the catalog" placeholder="Name, SKU or barcode" value={input} onInput={e=>{
-          setScannedBarcode(null);
-          setInput(e.currentTarget.value ?? '');
-        }}/>
-        <s-text color="subdued">Use a connected barcode scanner or search the catalog.</s-text>
-        <s-stack direction="inline" gap="base">
-          <s-button disabled={!connected || busy} onClick={()=>shopify.scanner.showCameraScanner()}>Scan with camera</s-button>
-          <s-button disabled={!connected || busy} onClick={()=>setRefresh(value=>value+1)}>Refresh</s-button>
+  if (!session) return <s-page heading="Store inventory">
+    <s-box padding="large">
+      {!connected ? <s-banner tone="warning" heading="POS is offline">Connect to the internet to view inventory.</s-banner> :
+        accessError ? <s-stack direction="block" gap="base">
+          <s-banner tone="critical" heading="Store inventory unavailable">{accessError}</s-banner>
+          <s-stack direction="inline">
+            <s-button variant="secondary" onClick={()=>setAccessAttempt(attempt=>attempt+1)}>Try again</s-button>
+          </s-stack>
+        </s-stack> :
+        <s-stack direction="inline" alignItems="center" gap="small">
+          <s-spinner accessibilityLabel="Opening Store inventory"/>
+          <s-text color="subdued">Opening Store inventory…</s-text>
+        </s-stack>}
+    </s-box>
+  </s-page>;
+
+  const viewOnly = !session.canPush && !session.canSet;
+  const pushEnabled = session.canPush && !detail?.pushBlocked && !recoverOperation;
+  const setEnabled = session.canSet && !detail?.setBlocked && !recoverOperation;
+  const resultHeading = scannedBarcode ? 'Barcode matches' : catalogSearch ? 'Catalog results' : 'Inventory queue';
+  const recentVisible = operation && (!catalogSearch || recoverOperation);
+
+  return <s-page heading="Store inventory" subheading={session.locationName}>
+    <s-scroll-box key={screen}>
+      <s-box padding="large">
+        <s-stack direction="block" gap="large">
+          {!connected && <s-banner tone="warning" heading="POS is offline">Reconnect for current quantities and actions.</s-banner>}
+          {error && <s-banner tone="critical" heading="Unable to complete action">{error}</s-banner>}
+          {screen === 'list' && <>
+            <s-stack direction="inline" alignItems="center" gap="base">
+              <s-box inlineSize="100%">
+                <s-search-field id="inventory-search" placeholder="Search by name, SKU or barcode" value={input} onInput={e=>{
+                  setScannedBarcode(null);
+                  setInput(e.currentTarget.value ?? '');
+                }}/>
+              </s-box>
+              <s-button variant="secondary" disabled={!connected || busy} onClick={()=>shopify.scanner.showCameraScanner()}>Scan</s-button>
+            </s-stack>
+            <s-section heading={resultHeading}>
+              <s-button slot="secondary-actions" variant="secondary" disabled={!connected || busy || loading} onClick={()=>setRefresh(value=>value+1)}>Refresh</s-button>
+              <s-stack direction="block" gap="small">
+                {viewOnly && <s-box paddingBlock="small"><s-badge>View only</s-badge></s-box>}
+                {listError && <s-banner tone="warning" heading="Inventory could not be loaded">{listError}</s-banner>}
+                {loading && connected && <s-stack direction="inline" gap="small" alignItems="center" paddingBlock="base">
+                  <s-spinner accessibilityLabel={catalogSearch ? 'Finding products' : 'Loading inventory queue'}/>
+                  <s-text color="subdued">{catalogSearch ? 'Finding products…' : 'Loading inventory queue…'}</s-text>
+                </s-stack>}
+                {!loading && !listError && connected && items.length === 0 && <s-box paddingBlock="base">
+                  <s-stack direction="inline" gap="base" alignItems="center">
+                    <s-icon type={catalogSearch ? 'search' : 'inventory-list'} color="subdued"/>
+                    <s-stack direction="block" gap="small-300">
+                      <s-text type="strong">{catalogSearch ? 'No matching products' : 'No pending inventory updates'}</s-text>
+                      <s-text color="subdued">{catalogSearch ? 'Try another name, SKU or barcode.' : 'Search the catalog to check a product at this location.'}</s-text>
+                    </s-stack>
+                  </s-stack>
+                </s-box>}
+                {items.map(item=><s-stack direction="block" key={item.itemId}>
+                  <s-divider/>
+                  <s-clickable disabled={busy || !connected} onClick={()=>openProduct(item.itemId)}>
+                    <s-stack direction="inline" alignItems="center" justifyContent="space-between" gap="base" paddingBlock="base" paddingInline="small">
+                      <s-stack direction="block" gap="small-300">
+                        <s-text type="strong">{item.title}</s-text>
+                        {titleFor(item) && <s-text type="small" color="subdued">{titleFor(item)}</s-text>}
+                        <s-text type="small">Shopify available {units(item.available)} · After queue {units(item.projectedAvailable)}</s-text>
+                        <s-text type="small" color="subdued">{timingFor(item,session.timeZone)}</s-text>
+                        {item.checkedAt && <s-text type="small" color="subdued">Checked {timeAt(item.checkedAt,session.timeZone)}</s-text>}
+                      </s-stack>
+                      <s-icon type="chevron-right" color="subdued"/>
+                    </s-stack>
+                  </s-clickable>
+                </s-stack>)}
+                {cursor && <s-stack direction="inline">
+                  <s-button variant="secondary" disabled={busy || loading || !connected} onClick={()=>run(async()=>{
+                    const result=await request(catalogSearch?'search':'queue',{search:catalogSearch,barcode:scannedBarcode !== null,cursor});
+                    setItems(previous=>[...previous,...result.items.filter(item=>!previous.some(p=>p.itemId===item.itemId))]);
+                    setCursor(result.cursor??null);
+                  })}>Load more</s-button>
+                </s-stack>}
+              </s-stack>
+            </s-section>
+            {recentVisible && operation && <s-section heading={recoverOperation ? 'Update needs review' : 'Recent update'}>
+              <s-divider/>
+              <s-clickable disabled={busy} onClick={()=>goTo('status')}>
+                <s-stack direction="inline" justifyContent="space-between" alignItems="center" paddingBlock="base" paddingInline="small" gap="base">
+                  <s-stack direction="block" gap="small-300">
+                    <s-text type="strong">{operationStates[operation.state]}</s-text>
+                    {operation.state==='confirmed' && <s-text type="small" color="subdued">
+                      {operation.targetAvailable} available · {timeAt(operation.confirmedAt,session.timeZone)}
+                    </s-text>}
+                  </s-stack>
+                  <s-icon type="chevron-right" color="subdued"/>
+                </s-stack>
+              </s-clickable>
+            </s-section>}
+          </>}
+          {screen === 'detail' && detail && <>
+            <BackLink disabled={busy} label={catalogSearch ? 'Catalog results' : 'Inventory queue'} onClick={()=>goTo('list')}/>
+            <ProductHeading item={detail}/>
+            <s-section heading="Shopify available">
+              <s-stack direction="block" gap="small">
+                <s-divider/>
+                <s-stack direction="inline" gap="large" paddingBlock="small">
+                  <Quantity label="Now" value={detail.available}/>
+                  <Quantity label="After queue" value={detail.projectedAvailable}/>
+                </s-stack>
+                <s-text type="small" color="subdued">{[
+                  detail.checkedAt ? 'Checked '+timeAt(detail.checkedAt,session.timeZone) : '',
+                  timingFor(detail,session.timeZone),
+                ].filter(Boolean).join(' · ')}</s-text>
+                <s-divider/>
+                <s-text type="small">
+                  On hand {units(detail.onHand)} · Committed {units(detail.committed)} · Other unavailable {units(detail.unavailable)} · HotWax ATP {units(detail.atp)}
+                </s-text>
+              </s-stack>
+            </s-section>
+            <s-section heading="Pending events">
+              {detail.events.length ? <Events rows={detail.events} zone={session.timeZone}/> :
+                <s-box paddingBlock="small"><s-text color="subdued">No pending events for this variant.</s-text></s-box>}
+            </s-section>
+            <s-section heading="Inventory actions">
+              <s-stack direction="block" gap="small">
+                {viewOnly && <s-badge>View only</s-badge>}
+                {recoverOperation && <s-stack direction="inline">
+                  <s-button variant="secondary" disabled={busy} onClick={()=>goTo('status')}>Check previous update</s-button>
+                </s-stack>}
+                <s-stack direction="inline" gap="base">
+                  <s-button variant={pushEnabled ? 'primary' : 'secondary'} disabled={busy || !connected || !pushEnabled} onClick={()=>preview('push')}>Review push now</s-button>
+                  <s-button variant={!pushEnabled && setEnabled ? 'primary' : 'secondary'} disabled={busy || !connected || !setEnabled} onClick={()=>goTo('edit')}>
+                    {detail.events.length ? 'Discard and set' : 'Set available'}
+                  </s-button>
+                </s-stack>
+                {session.canPush && detail.pushBlocked && <s-text type="small" color="subdued">{detail.pushBlocked}</s-text>}
+                {session.canSet && detail.setBlocked && detail.setBlocked !== detail.pushBlocked && <s-text type="small" color="subdued">{detail.setBlocked}</s-text>}
+              </s-stack>
+            </s-section>
+          </>}
+          {screen === 'edit' && detail && <>
+            <BackLink disabled={busy} label="Product details" onClick={()=>goTo('detail')}/>
+            <ProductHeading item={detail}/>
+            <s-section heading="Set Shopify available">
+              <s-stack direction="block" gap="base" maxInlineSize="640px">
+                <s-text color="subdued">Current Shopify available {units(detail.available)}</s-text>
+                <s-box maxInlineSize="240px">
+                  <s-number-field label="New Shopify available" min={0} max={2147483647} controls="none" inputMode="numeric" value={quantity} onInput={e=>setQuantity(e.currentTarget.value ?? '')}/>
+                </s-box>
+                <s-stack direction="block" gap="small">
+                  <s-text type="strong">Reason</s-text>
+                  <s-choice-list values={reason?[reason]:[]} onChange={e=>setReason(e.currentTarget.values?.[0] ?? '')}>
+                    {reasons.map(([key,label])=><s-choice key={key} value={key}>{label}</s-choice>)}
+                  </s-choice-list>
+                </s-stack>
+                <s-text-field label={reason==='other'?'Note (required)':'Note (optional)'} maxLength={300} value={note} onInput={e=>setNote(e.currentTarget.value ?? '')}/>
+                <s-stack direction="inline">
+                  <s-button variant="primary" disabled={busy || !connected || !quantity.trim() || !reason || (reason==='other' && !note.trim())} onClick={()=>preview('set')}>Review change</s-button>
+                </s-stack>
+              </s-stack>
+            </s-section>
+          </>}
+          {screen === 'review' && review && detail && <>
+            <BackLink disabled={busy} label={review.action==='set'?'Edit quantity':'Product details'} onClick={()=>goTo(review.action==='set'?'edit':'detail')}/>
+            <ProductHeading item={detail}/>
+            <s-section heading={review.action==='push'?'Review push now':'Review inventory change'}>
+              <s-stack direction="block" gap="small">
+                <s-divider/>
+                <s-stack direction="inline" gap="large" paddingBlock="small">
+                  <Quantity label="Shopify available now" value={review.currentAvailable}/>
+                  <Quantity label="After update" value={review.targetAvailable}/>
+                </s-stack>
+                <s-text type="small" color="subdued">Committed {units(review.committed)} · Other unavailable {units(review.unavailable ?? null)}</s-text>
+                {review.action==='set' && <>
+                  <s-divider/>
+                  <s-text>HotWax ATP {review.currentAtp} → {review.targetAvailable}</s-text>
+                  <s-text>HotWax variance {signed(review.variance)} units</s-text>
+                  {review.onHandVariance!=null && <s-text>HotWax on-hand variance {signed(review.onHandVariance)} units</s-text>}
+                  <s-text type="small" color="subdued">{review.variance === 0 ? 'HotWax requests one Shopify reset for this item.' : 'HotWax saves the variance and requests one Shopify reset for this item.'}</s-text>
+                </>}
+              </s-stack>
+            </s-section>
+            {review.effects.length > 0 && <s-section heading={review.action==='push'?'Effects to send':'Pending effects to discard'}>
+              <Events rows={review.effects} zone={session.timeZone}/>
+            </s-section>}
+            <s-stack direction="inline">
+              <s-button variant="primary" disabled={busy || !connected || recoverOperation} onClick={()=>saveReview(review.operationId)}>{review.action==='push'?'Push now':'Set Shopify available to '+review.targetAvailable}</s-button>
+            </s-stack>
+          </>}
+          {screen === 'status' && operation && <>
+            <BackLink disabled={busy} label="Inventory queue" onClick={()=>goTo('list')}/>
+            <s-banner tone={operation.state==='confirmed'?'success':operation.state==='needsAttention'||operation.state==='expired'?'warning':'info'} heading={operationStates[operation.state]}>
+              {operation.state==='confirmed' && <s-text>{operation.targetAvailable} available · Confirmed {timeAt(operation.confirmedAt,session.timeZone)}</s-text>}
+              {operation.state!=='confirmed' && operationNote && <s-text>{operationNote}</s-text>}
+            </s-banner>
+            <s-stack direction="block" gap="small">
+              {operation.action==='set' && ['sending','needsAttention','confirmed'].includes(operation.state) &&
+                <s-text type="strong">Saved in HotWax</s-text>}
+              {operation.state!=='confirmed' && operation.lastConfirmed && <s-text>Last confirmed Shopify available {operation.lastConfirmed.available}
+                {operation.lastConfirmed.checkedAt && ' · Checked '+timeAt(operation.lastConfirmed.checkedAt,session.timeZone)}</s-text>}
+              {operation.state==='confirmed' && operationNote && <s-text>{operationNote}</s-text>}
+              <s-text type="small" color="subdued">Reference {operation.operationId}</s-text>
+            </s-stack>
+            <s-stack direction="inline" gap="base">
+              <s-button variant="secondary" disabled={busy || !connected} onClick={reloadOperation}>Check status</s-button>
+              {operation.state==='review' && ((operation.action==='set' && session.canSet) || (operation.action==='push' && session.canPush)) &&
+                <s-button variant="primary" disabled={busy || !connected} onClick={()=>saveReview(operation.operationId)}>Retry save</s-button>}
+              {operation.canRetry && <s-button variant="primary" disabled={busy || !connected} onClick={()=>run(async()=>{
+                setOperation(await request('retry',{operationId:operation.operationId}));
+              })}>Retry Shopify delivery</s-button>}
+            </s-stack>
+          </>}
         </s-stack>
-      </s-stack></s-section>
-      {operation && <s-section heading="Recent update">
-        <s-button disabled={busy} onClick={()=>setScreen('status')}>{operationStates[operation.state]} · {operation.operationId}</s-button>
-      </s-section>}
-      <s-section heading={scannedBarcode ? 'Barcode matches' : catalogSearch ? 'Catalog results' : 'Inventory queue'}>
-        <s-stack direction="block" gap="base">
-          {listError && <s-banner tone="warning" heading={listError}/>}
-          {loading && <s-spinner accessibilityLabel={catalogSearch ? 'Finding products' : 'Loading inventory queue'}/>}
-          {!loading && !listError && connected && items.length === 0 &&
-            <s-text color="subdued">{catalogSearch ? 'No products match this search.' : 'No events are waiting to reach Shopify at this location.'}</s-text>}
-          {items.map(item=><s-clickable key={item.itemId} disabled={busy || !connected} onClick={()=>openProduct(item.itemId)}>
-            <s-box padding="base" minBlockSize="64px"><s-stack direction="inline" alignItems="center" justifyContent="space-between" gap="base">
-              <s-stack direction="block" gap="small"><s-text type="strong">{item.title}</s-text><s-text color="subdued">{titleFor(item)}</s-text>
-                <s-text>Shopify available {units(item.available)} · After queue {units(item.projectedAvailable)}</s-text>
-                <s-text color="subdued">{timingFor(item,session.timeZone)}</s-text>
-                {item.checkedAt && <s-text color="subdued">Checked {timeAt(item.checkedAt,session.timeZone)}</s-text>}
-              </s-stack><s-icon type="chevron-right"/>
-            </s-stack></s-box>
-          </s-clickable>)}
-          {cursor && <s-button disabled={busy || loading || !connected} onClick={()=>run(async()=>{
-            const result=await request(catalogSearch?'search':'queue',{search:catalogSearch,barcode:scannedBarcode !== null,cursor});
-            setItems(previous=>[...previous,...result.items.filter(item=>!previous.some(p=>p.itemId===item.itemId))]);
-            setCursor(result.cursor??null);
-          })}>Load more</s-button>}
-        </s-stack>
-      </s-section>
-    </>}
-    {screen === 'detail' && detail && <>
-      <s-section><s-button disabled={busy} onClick={()=>setScreen('list')}>Back to inventory</s-button></s-section>
-      <s-section heading={detail.title}><s-stack direction="block" gap="base">
-        <s-text color="subdued">{titleFor(detail)}</s-text>
-        <s-text type="strong">Shopify available {units(detail.available)} · After queue {units(detail.projectedAvailable)}</s-text>
-        {detail.checkedAt && <s-text color="subdued">Checked {timeAt(detail.checkedAt,session.timeZone)}</s-text>}
-        <s-text>{timingFor(detail,session.timeZone)}</s-text>
-        <s-text>On hand {units(detail.onHand)} · Committed {units(detail.committed)} · Other unavailable {units(detail.unavailable)}</s-text>
-        <s-text>HotWax facility ATP {units(detail.atp)}</s-text>
-      </s-stack></s-section>
-      <s-section heading="Pending events">
-        {detail.events.length ? <Events rows={detail.events} zone={session.timeZone}/> : <s-text>No pending events for this variant at this location.</s-text>}
-      </s-section>
-      <s-section heading="Inventory actions"><s-stack direction="block" gap="base">
-        {recoverOperation && <s-button disabled={busy} onClick={()=>setScreen('status')}>Check previous update</s-button>}
-        {detail.pushBlocked && <s-text color="subdued">{detail.pushBlocked}</s-text>}
-        <s-button variant="primary" disabled={busy || !connected || recoverOperation || !session.canPush || Boolean(detail.pushBlocked)} onClick={()=>preview('push')}>Review push now</s-button>
-        {detail.setBlocked && <s-text color="subdued">{detail.setBlocked}</s-text>}
-        <s-button disabled={busy || !connected || recoverOperation || !session.canSet || Boolean(detail.setBlocked)} onClick={()=>setScreen('edit')}>
-          {detail.events.length ? 'Discard and set' : 'Set available'}
-        </s-button>
-      </s-stack></s-section>
-    </>}
-    {screen === 'edit' && detail && <s-section heading={'Set Shopify available · '+detail.title}>
-      <s-stack direction="block" gap="base">
-        <s-number-field label="New Shopify available" min={0} max={2147483647} controls="none" inputMode="numeric" value={quantity} onInput={e=>setQuantity(e.currentTarget.value ?? '')}/>
-        <s-text>Reason</s-text>
-        <s-choice-list values={reason?[reason]:[]} onChange={e=>setReason(e.currentTarget.values?.[0] ?? '')}>
-          {reasons.map(([key,label])=><s-choice key={key} value={key}>{label}</s-choice>)}
-        </s-choice-list>
-        <s-text-field label={reason==='other'?'Note (required)':'Note (optional)'} maxLength={300} value={note} onInput={e=>setNote(e.currentTarget.value ?? '')}/>
-        <s-stack direction="inline" gap="base">
-          <s-button disabled={busy} onClick={()=>setScreen('detail')}>Back</s-button>
-          <s-button variant="primary" disabled={busy || !connected} onClick={()=>preview('set')}>Review change</s-button>
-        </s-stack>
+      </s-box>
+    </s-scroll-box>
+  </s-page>;
+}
+
+function BackLink({label,disabled,onClick}: {label: string; disabled: boolean; onClick: () => void}) {
+  return <s-stack direction="inline">
+    <s-clickable disabled={disabled} onClick={onClick}>
+      <s-stack direction="inline" alignItems="center" gap="small" minBlockSize="44px">
+        <s-icon type="chevron-left"/>
+        <s-text type="strong">{label}</s-text>
       </s-stack>
-    </s-section>}
-    {screen === 'review' && review && detail && <s-section heading={review.action==='push'?'Review push now':'Review inventory change'}>
-      <s-stack direction="block" gap="base">
-        <s-text type="strong">{detail.title} · {titleFor(detail)}</s-text>
-        <s-text>Shopify available {review.currentAvailable} → {review.targetAvailable}</s-text>
-        <s-text>Shopify committed {units(review.committed)} · Other unavailable {units(review.unavailable ?? null)}</s-text>
-        {review.action==='set' && <>
-          <s-text>HotWax facility ATP {review.currentAtp} → {review.targetAvailable}</s-text>
-          <s-text type="strong">HotWax variance {signed(review.variance)} units</s-text>
-          {review.onHandVariance!=null && <s-text>HotWax on-hand variance {signed(review.onHandVariance)} units</s-text>}
-          <s-text>{review.variance === 0 ? 'HotWax requests one Shopify reset for this item.' : 'HotWax saves the variance and requests one Shopify reset for this item.'}</s-text>
-        </>}
-        {review.effects.length > 0 && <>
-          <s-text type="strong">{review.action==='push'?'Effects to send':'Pending effects to discard'}</s-text>
-          <Events rows={review.effects} zone={session.timeZone}/>
-        </>}
-        <s-stack direction="inline" gap="base">
-          <s-button disabled={busy} onClick={()=>setScreen(review.action==='set'?'edit':'detail')}>Back</s-button>
-          <s-button variant="primary" disabled={busy || !connected || recoverOperation} onClick={()=>saveReview(review.operationId)}>{review.action==='push'?'Push now':'Set Shopify available to '+review.targetAvailable}</s-button>
-        </s-stack>
-      </s-stack>
-    </s-section>}
-    {screen === 'status' && operation && <s-section heading={operationStates[operation.state]}>
-      <s-stack direction="block" gap="base">
-        <s-text>Reference {operation.operationId}</s-text>
-        {operation.action==='set' && ['saved','sending','needsAttention','confirmed'].includes(operation.state) &&
-          <s-text>Saved in HotWax</s-text>}
-        {operation.state==='confirmed' && <s-text>{operation.targetAvailable} available · Confirmed {timeAt(operation.confirmedAt,session.timeZone)}</s-text>}
-        {operation.lastConfirmed && <s-text>Last confirmed Shopify available {operation.lastConfirmed.available}
-          {operation.lastConfirmed.checkedAt && ' · Checked '+timeAt(operation.lastConfirmed.checkedAt,session.timeZone)}</s-text>}
-        {operationNote && <s-text>{operationNote}</s-text>}
-        <s-stack direction="inline" gap="base">
-          <s-button disabled={busy} onClick={()=>setScreen('list')}>Back to inventory</s-button>
-          <s-button disabled={busy || !connected} onClick={reloadOperation}>Check status</s-button>
-          {operation.state==='review' && ((operation.action==='set' && session.canSet) || (operation.action==='push' && session.canPush)) &&
-            <s-button disabled={busy || !connected} onClick={()=>saveReview(operation.operationId)}>Retry save</s-button>}
-          {operation.canRetry && <s-button disabled={busy || !connected} onClick={()=>run(async()=>{
-            setOperation(await request('retry',{operationId:operation.operationId}));
-          })}>Retry Shopify delivery</s-button>}
-        </s-stack>
-      </s-stack>
-    </s-section>}
-  </s-stack></s-scroll-box>;
+    </s-clickable>
+  </s-stack>;
+}
+
+function ProductHeading({item}: {item: InventoryProduct}) {
+  return <s-stack direction="block" gap="small-300">
+    <s-heading>{item.title}</s-heading>
+    {titleFor(item) && <s-text color="subdued">{titleFor(item)}</s-text>}
+  </s-stack>;
+}
+
+function Quantity({label,value}: {label: string; value: number | null}) {
+  return <s-stack direction="block" gap="small-300">
+    <s-text type="small" color="subdued">{label}</s-text>
+    <s-heading>{units(value)}</s-heading>
+  </s-stack>;
 }
 
 function Events({rows,zone}: {rows: InventoryEffect[]; zone?: string}) {
-  return <s-stack direction="block" gap="base">{rows.map(row=><s-box key={row.id} padding="small">
-    <s-stack direction="inline" gap="base" justifyContent="space-between">
-      <s-stack direction="block" gap="small"><s-text type="strong">{row.source}</s-text><s-text color="subdued">{row.reference} · {timeAt(row.at,zone)}</s-text>
-        {row.detail && <s-text color="subdued">{row.detail}</s-text>}
+  return <s-stack direction="block">{rows.map(row=><s-stack key={row.id} direction="block">
+    <s-divider/>
+    <s-stack direction="inline" gap="base" justifyContent="space-between" paddingBlock="base">
+      <s-stack direction="block" gap="small-300">
+        <s-text type="strong">{row.source}</s-text>
+        <s-text type="small" color="subdued">{[row.reference,timeAt(row.at,zone)].filter(Boolean).join(' · ')}</s-text>
+        {row.detail && <s-text type="small" color="subdued">{row.detail}</s-text>}
       </s-stack>
-      <s-stack direction="block" gap="small"><s-text type="strong">{signed(row.delta)}</s-text><s-badge>{row.eligible?'Discard eligible':effectStates[row.state]}</s-badge></s-stack>
+      <s-stack direction="block" gap="small-300" alignItems="end">
+        <s-text type="strong">{signed(row.delta)}</s-text>
+        <s-badge tone={row.state==='confirmed'?'success':row.state==='needsAttention'?'warning':'neutral'}>{row.eligible?'Discard eligible':effectStates[row.state]}</s-badge>
+      </s-stack>
     </s-stack>
-  </s-box>)}</s-stack>;
+  </s-stack>)}</s-stack>;
 }
