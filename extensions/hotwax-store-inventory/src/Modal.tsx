@@ -120,14 +120,14 @@ function Workspace({scope}: {scope: InventoryScope}) {
       signal:requestSignal,
     });
     if (!response.ok) throw new Error('HotWax could not complete the request. Check the connection and try again.');
-    const result = await response.json() as {error?: string; message?: string; result?: Responses[Action]};
+    const result = await response.json() as {error?: string; message?: string; inventoryResponse?: Responses[Action]};
     assertScope();
     if (result.error) {
       if (result.error === 'ACCESS_EXPIRED') setSession(null);
       throw new Error(result.message || 'HotWax could not complete the request.');
     }
-    if (!result.result) throw new Error('HotWax returned an incomplete inventory response.');
-    return result.result;
+    if (!result.inventoryResponse) throw new Error('HotWax returned an incomplete inventory response.');
+    return result.inventoryResponse;
   }
 
   function signIn() {
