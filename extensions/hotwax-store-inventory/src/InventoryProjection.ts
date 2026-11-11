@@ -11,8 +11,8 @@ type Assignment = {id: string; status: string; assignedLocation: {location: {id:
   deliveryMethod: {methodType: string} | null};
 type AssignedLine = {lineItem: {id: string}; totalQuantity: number; remainingQuantity: number};
 type SalesImpact = {atp: number; onHand: number};
-export type PendingSale = {id: string; name: string; createdAt: number; cancelled: boolean; impact: SalesImpact | null};
-export type StoreSales = {checkedAt: number; orderCount: number; pending: PendingSale[]; impact: SalesImpact | null};
+type StoreSale = {id: string; name: string; createdAt: number; cancelled: boolean; synced: boolean; impact: SalesImpact | null};
+export type StoreSales = {checkedAt: number; orders: StoreSale[]; pendingCount: number; impact: SalesImpact | null};
 
 export function projectShopify(level: InventoryLevel, events: InventoryEvent[]) {
   if (events.some(event=>event.state!=='Pending' && event.state!=='Queued')) {
@@ -210,14 +210,16 @@ export async function recentStoreSales(location: Location, variantId: string | u
     lookups.push(importedOrderIds(oms,location.productStoreId,orders.slice(start,start+50).map(externalId)));
   }
   const imported = new Set((await Promise.all(lookups)).flatMap(ids=>[...ids]));
-  const pending = await Promise.all(orders.filter(order=>!imported.has(externalId(order))).map(async order=>{
+  const sales = await Promise.all(orders.map(async order=>{
+    const synced = imported.has(externalId(order));
     const cancelled = Boolean(order.cancelledAt);
-    const impact = cancelled ? {atp:0,onHand:0} : variantId
+    const impact = synced ? null : cancelled ? {atp:0,onHand:0} : variantId
       ? await saleImpact(oms,location,order.id,variantId).catch(()=>null) : null;
-    return {id:order.id,name:order.name,createdAt:Date.parse(order.createdAt),cancelled,impact};
+    return {id:order.id,name:order.name,createdAt:Date.parse(order.createdAt),cancelled,synced,impact};
   }));
+  const pending = sales.filter(order=>!order.synced);
   const impact = pending.reduce<SalesImpact | null>((total,order)=>total && order.impact ? {
     atp:total.atp+order.impact.atp,onHand:total.onHand+order.impact.onHand,
   } : null,{atp:0,onHand:0});
-  return {checkedAt,orderCount:orders.length,pending,impact};
+  return {checkedAt,orders:sales,pendingCount:pending.length,impact};
 }

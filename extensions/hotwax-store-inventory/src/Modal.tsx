@@ -201,31 +201,38 @@ function InventoryHistory({store,openProduct,initialTab='events',itemFilter,prod
           productImageUrl={productImageUrl} varianceRead={varianceRead}/>}
       </s-tab-panel>
       {sales && <s-tab-panel id="sales">
-        {tab==='sales' && <PendingSales sales={sales} connected={store.connected}/>}
+        {tab==='sales' && <PosSales sales={sales} connected={store.connected}/>}
       </s-tab-panel>}
     </s-tabs>
   </s-section>;
 }
 
-function PendingSales({sales,connected}: {sales: SalesRead; connected: boolean}) {
+function PosSales({sales,connected}: {sales: SalesRead; connected: boolean}) {
   const now = useNow();
   const [visibleCount,setVisibleCount] = useState(EVENT_ROWS_PER_PAGE);
+  const [showSynced,setShowSynced] = useState(false);
   const data = sales.data;
+  const orders = data?.orders ?? [];
+  const visibleOrders = showSynced ? orders : orders.filter(order=>!order.synced);
   return <s-stack direction="block" gap="small" paddingBlock="base">
+    <s-switch label="Show synced" checked={showSynced} onChange={event=>{
+      setShowSynced(Boolean(event.currentTarget.checked));setVisibleCount(EVENT_ROWS_PER_PAGE);
+    }}/>
     {connected && sales.loading && <Loading label="Checking POS orders…"/>}
     {sales.error && <s-banner tone="warning" heading="POS orders unavailable">{sales.error}</s-banner>}
     {data && <>
-      <s-text type="strong">{data.pending.length} of {data.orderCount} POS orders awaiting HotWax import</s-text>
+      <s-text type="strong">{data.pendingCount} of {orders.length} POS orders awaiting HotWax import</s-text>
       <s-text type="small" color="subdued">Created in the hour before the check · Checked {ago(data.checkedAt,now)}</s-text>
-      {data.pending.slice(0,visibleCount).map(order=>{
+      {visibleOrders.slice(0,visibleCount).map(order=>{
         const impact = order.impact;
         const change = impact && (impact.atp || impact.onHand)
           ? 'ATP −'+impact.atp+' · On hand −'+impact.onHand : 'No change for this product';
-        return <Row key={order.id} title={order.name} state={order.cancelled?'Cancelled':'Awaiting import'}
-          detail={order.cancelled ? undefined : impact ? change : 'Product quantity unavailable'}
+        const state = order.synced ? 'Synced' : order.cancelled ? 'Cancelled' : 'Awaiting import';
+        return <Row key={order.id} title={order.name} state={state}
+          detail={order.synced || order.cancelled ? undefined : impact ? change : 'Product quantity unavailable'}
           timing={'Created '+ago(order.createdAt,now)}/>;
       })}
-      {visibleCount < data.pending.length && <s-stack direction="inline">
+      {visibleCount < visibleOrders.length && <s-stack direction="inline">
         <s-button variant="secondary" onClick={()=>setVisibleCount(count=>count+EVENT_ROWS_PER_PAGE)}>Load more</s-button>
       </s-stack>}
     </>}
