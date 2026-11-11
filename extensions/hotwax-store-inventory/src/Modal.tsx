@@ -2,7 +2,7 @@ import '@shopify/ui-extensions/preact';
 import {render} from 'preact';
 import {useEffect, useRef, useState} from 'preact/hooks';
 import {inventoryScope, sameInventoryScope, type InventoryScope} from '../../../shared/store-inventory';
-import {inventoryEvents, inventoryLevel, inventoryLocation, type InventoryEvent, type Variant} from './Inventory';
+import {inventoryEvents, inventoryLevel, inventoryLocation, searchInventory, type InventoryEvent, type Variant} from './Inventory';
 
 type Location = Awaited<ReturnType<typeof inventoryLocation>>;
 type Tab = 'queue' | 'recent';
@@ -91,7 +91,8 @@ function Workspace({scope}: {scope: InventoryScope}) {
     return ()=>controller.abort();
   },[connected,refresh]);
 
-  async function searchProducts(query: string, afterCursor?: string) {
+  async function searchProducts(query: string, signal: AbortSignal, afterCursor?: string) {
+    if (connected && location) return searchInventory(location,query,scan,signal,afterCursor);
     const result = await shopify.productSearch.searchProducts({queryString:query,first:15,afterCursor});
     const found = result.items.flatMap(product=>product.variants.map(variant=>({
       title:product.title,option:product.hasOnlyDefaultVariant?undefined:variant.title,
@@ -114,11 +115,11 @@ function Workspace({scope}: {scope: InventoryScope}) {
     setListError('');
     if (search) {
       setLoading(true);
-      searchProducts(search)
+      searchProducts(search,controller.signal)
         .then(result=>{
           if (!controller.signal.aborted) {setProducts(result.items);setCursor(result.cursor);}
         })
-        .catch(()=>{if (!controller.signal.aborted) setListError('Shopify POS could not search products.');})
+        .catch(cause=>{if (!controller.signal.aborted) setListError(errorText(cause,'Shopify could not search products.'));})
         .finally(()=>{if (!controller.signal.aborted) setLoading(false);});
     } else if (connected && location) {
       setLoading(true);
@@ -176,7 +177,7 @@ function Workspace({scope}: {scope: InventoryScope}) {
     setListError('');
     try {
       if (search && cursor) {
-        const result = await searchProducts(search,cursor);
+        const result = await searchProducts(search,request.signal,cursor);
         if (request.signal.aborted) return;
         setProducts(previous=>[...previous,...result.items.filter(item=>!previous.some(loaded=>loaded.variantId===item.variantId))]);
         setCursor(result.cursor);

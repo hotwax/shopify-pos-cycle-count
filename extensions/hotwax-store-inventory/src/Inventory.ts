@@ -17,7 +17,7 @@ type Ledger = {details: unknown; hasMore?: boolean};
 type Quantities = {name: string; quantity: number}[];
 type ItemNode = {id: string; inventoryLevel?: {quantities: Quantities}; variant?: VariantNode};
 type VariantNode = {
-  id: string; title: string; sku?: string; product: {title: string}; inventoryItem?: ItemNode;
+  id: string; title: string; sku?: string; barcode?: string; product: {title: string}; inventoryItem?: ItemNode;
 };
 
 const LEDGER = '/rest/s1/sob/shopify/locationInventoryAdjustmentDetails';
@@ -90,6 +90,30 @@ function readEvent(row: OmsRow): InventoryEvent {
     source:text(row.eventTypeDescription || row.eventTypeId),
     state:message ? states[status] || 'Assigned' : delta ? 'Queued' : 'No change',
   };
+}
+
+export async function searchInventory(location: Location, query: string, barcode: string, signal: AbortSignal, after?: string) {
+  const quoted = JSON.stringify(query.slice(0,120).replace(/\s+/g,' '));
+  const filter = barcode ? 'barcode:'+quoted : '('+quoted+' OR sku:'+quoted+' OR barcode:'+quoted+')';
+  const result = await connection(location,signal).postRead('/rest/s1/shopify/graphql',{
+    shopId:location.shopId,
+    queryText:`query StoreInventorySearch($after: String, $filter: String!) {
+      productVariants(first: 20, after: $after, query: $filter) {
+        nodes { ${VARIANT_FIELDS} barcode inventoryItem { id } }
+        pageInfo { endCursor hasNextPage }
+      }
+    }`,
+    variables:{after:after ?? null,filter},
+  });
+  const page = (result.response as {productVariants?: {
+    nodes: VariantNode[]; pageInfo: {endCursor?: string; hasNextPage: boolean};
+  }} | undefined)?.productVariants;
+  if (!page || !Array.isArray(page.nodes)) throw new OmsLookupError('Shopify returned incomplete product results.');
+  const items = page.nodes.filter(node=>!barcode || node.barcode===barcode).map(node=>({
+    title:node.product.title,option:node.title==='Default Title'?undefined:node.title,sku:node.sku,barcode:node.barcode,
+    variantId:node.id.split('/').at(-1),itemId:node.inventoryItem?.id.split('/').at(-1),
+  }));
+  return {items,cursor:page.pageInfo.hasNextPage?page.pageInfo.endCursor:undefined};
 }
 
 export async function inventoryLevel(location: Location, item: Variant, signal: AbortSignal) {
