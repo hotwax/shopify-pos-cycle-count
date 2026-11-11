@@ -160,9 +160,9 @@ function InventoryHome({scope,owner}: {scope: InventoryScope; owner: string}) {
 type Store = ReturnType<typeof useStoreLocation>;
 type ListFilter = {id?: string; loading: boolean; error?: string};
 
-function InventoryHistory({store,openProduct,initialTab='events',itemFilter,productFilter}: {
+function InventoryHistory({store,openProduct,initialTab='events',itemFilter,productFilter,productImageUrl}: {
   store: Store; openProduct?: (product: Variant,tab: HistoryTab) => void;
-  initialTab?: HistoryTab; itemFilter?: ListFilter; productFilter?: ListFilter;
+  initialTab?: HistoryTab; itemFilter?: ListFilter; productFilter?: ListFilter; productImageUrl?: string;
 }) {
   const [tab,setTab] = useState(initialTab);
   return <s-section heading="Inventory changes">
@@ -176,17 +176,17 @@ function InventoryHistory({store,openProduct,initialTab='events',itemFilter,prod
         <s-tab controls="proposals">Proposed variances</s-tab>
       </s-tab-list>
       <s-tab-panel id="events">
-        {tab==='events' && <InventoryEventList store={store} filter={itemFilter} openProduct={openProduct}/>}
+        {tab==='events' && <InventoryEventList store={store} filter={itemFilter} openProduct={openProduct} productImageUrl={productImageUrl}/>}
       </s-tab-panel>
       <s-tab-panel id="proposals">
-        {tab==='proposals' && <ProposedVarianceList store={store} filter={productFilter} openProduct={openProduct}/>}
+        {tab==='proposals' && <ProposedVarianceList store={store} filter={productFilter} openProduct={openProduct} productImageUrl={productImageUrl}/>}
       </s-tab-panel>
     </s-tabs>
   </s-section>;
 }
 
-function InventoryEventList({store,filter,openProduct}: {
-  store: Store; filter?: ListFilter; openProduct?: (product: Variant,tab: HistoryTab) => void;
+function InventoryEventList({store,filter,openProduct,productImageUrl}: {
+  store: Store; filter?: ListFilter; openProduct?: (product: Variant,tab: HistoryTab) => void; productImageUrl?: string;
 }) {
   const {connected,location,locationError} = store;
   const itemId = filter?.id;
@@ -254,7 +254,7 @@ function InventoryEventList({store,filter,openProduct}: {
         title={filter ? record : product.title}
         subtitle={filter ? source?.actor : labelFor(product)}
         detail={filter ? undefined : [record,source?.actor].filter(Boolean).join(' · ')}
-        timing={eventTiming(event,now)} imageUrl={product.imageUrl} value={signed(event.delta)} state={event.state}
+        timing={eventTiming(event,now)} imageUrl={productImageUrl ?? product.imageUrl} value={signed(event.delta)} state={event.state}
         onClick={openProduct ? ()=>openProduct(product,'events') : undefined}/>;
     })}
     {visibleCount < visibleEvents.length && <s-stack direction="inline">
@@ -263,8 +263,8 @@ function InventoryEventList({store,filter,openProduct}: {
   </s-stack>;
 }
 
-function ProposedVarianceList({store,filter,openProduct}: {
-  store: Store; filter?: ListFilter; openProduct?: (product: Variant,tab: HistoryTab) => void;
+function ProposedVarianceList({store,filter,openProduct,productImageUrl}: {
+  store: Store; filter?: ListFilter; openProduct?: (product: Variant,tab: HistoryTab) => void; productImageUrl?: string;
 }) {
   const {connected,location,locationError} = store;
   const productId = filter?.id;
@@ -304,7 +304,7 @@ function ProposedVarianceList({store,filter,openProduct}: {
     {canRead && proposals.slice(0,visibleCount).map(({id,product,countName,counted,delta})=>
       <Row key={id} title={filter ? countName : product.title}
         subtitle={filter ? undefined : countName} detail={'Counted '+counted}
-        imageUrl={filter ? undefined : product.imageUrl} value={signed(delta)} state="Awaiting approval"
+        imageUrl={productImageUrl ?? product.imageUrl} value={signed(delta)} state="Awaiting approval"
         onClick={openProduct ? ()=>openProduct(product,'proposals') : undefined}/>)}
     {canRead && visibleCount < proposals.length && <s-stack direction="inline">
       <s-button variant="secondary" onClick={()=>setVisibleCount(count=>count+EVENT_ROWS_PER_PAGE)}>Load more</s-button>
@@ -427,6 +427,7 @@ function ProductSearch({scope,owner}: {scope: InventoryScope; owner: string}) {
 function ProductDetail({scope,selected,initialTab}: {scope: InventoryScope; selected: Variant; initialTab?: HistoryTab}) {
   const store = useStoreLocation(scope);
   const {connected,location,locationError} = store;
+  const [isTablet,setIsTablet] = useState(false);
   const [snapshot,setSnapshot] = useState<Awaited<ReturnType<typeof inventoryLevel>>>();
   const [reading,setReading] = useState(true);
   const [detailError,setDetailError] = useState('');
@@ -441,6 +442,12 @@ function ProductDetail({scope,selected,initialTab}: {scope: InventoryScope; sele
   const variantId = selected.variantId ?? snapshot?.product.variantId;
   const itemId = selected.itemId ?? snapshot?.product.itemId;
   const productId = selected.hotWaxProductId ?? mappedProductId;
+
+  useEffect(()=>{
+    let active = true;
+    shopify.device.isTablet().then(tablet=>{if (active) setIsTablet(tablet);}).catch(()=>{});
+    return ()=>{active = false;};
+  },[]);
 
   useEffect(()=>{
     if (!location || !connected) return;
@@ -503,46 +510,53 @@ function ProductDetail({scope,selected,initialTab}: {scope: InventoryScope; sele
       <s-box padding="large">
         <s-stack direction="block" gap="large">
           {!connected && <OfflineBanner/>}
-          <s-stack direction="block" gap="small-300">
-            <s-heading>{product.title}</s-heading>
-            {labelFor(product) && <s-text color="subdued">{labelFor(product)}</s-text>}
+          <s-stack direction={isTablet?'inline':'block'} alignItems={isTablet?'start':'stretch'} gap="base">
+            <s-stack direction="block" gap="base" inlineSize={isTablet?'33%':'100%'}>
+              <s-stack direction="block" gap="small-300">
+                <s-heading>{product.title}</s-heading>
+                {labelFor(product) && <s-text color="subdued">{labelFor(product)}</s-text>}
+              </s-stack>
+              {product.imageUrl && <s-box inlineSize="256px" maxInlineSize="100%" blockSize="256px">
+                <s-image src={product.imageUrl} objectFit="contain" borderRadius="base"/>
+              </s-box>}
+            </s-stack>
+            <s-box inlineSize={isTablet?'63%':'100%'}>
+              <s-section heading="Inventory quantities">
+                <s-stack direction="block" gap="base">
+                  <s-stack direction="block" gap="small">
+                    <s-heading>Shopify</s-heading>
+                    {connected && reading && !locationError && <Loading label="Checking Shopify quantities…"/>}
+                    {(detailError || locationError) && <s-banner tone="warning" heading="Shopify quantities unavailable">
+                      {detailError || locationError}
+                    </s-banner>}
+                    {level && <>
+                      <s-stack direction="inline">
+                        <Quantity label="Available" value={level.available}/>
+                        <Quantity label="On hand" value={level.onHand}/>
+                        <Quantity label="Committed" value={level.committed}/>
+                      </s-stack>
+                      <s-text type="small" color="subdued">Checked {timeAt(level.checkedAt,location?.timeZone)}</s-text>
+                    </>}
+                  </s-stack>
+                  <s-divider/>
+                  <s-stack direction="block" gap="small">
+                    <s-heading>HotWax</s-heading>
+                    {loadingHotWax && <Loading label="Checking HotWax quantities…"/>}
+                    {unavailableHotWax && <s-banner tone="warning" heading="HotWax quantities unavailable">{unavailableHotWax}</s-banner>}
+                    {hotWax && <>
+                      <s-stack direction="inline">
+                        <Quantity label="ATP" value={hotWax.atp}/>
+                        <Quantity label="On hand (QOH)" value={hotWax.onHand}/>
+                        <Quantity label="Reservations" value={hotWax.reservations}/>
+                      </s-stack>
+                      <s-text type="small" color="subdued">Checked {timeAt(hotWax.checkedAt,location?.timeZone)}</s-text>
+                    </>}
+                  </s-stack>
+                </s-stack>
+              </s-section>
+            </s-box>
           </s-stack>
-          {product.imageUrl && <s-box inlineSize="256px" maxInlineSize="100%" blockSize="256px">
-            <s-image src={product.imageUrl} objectFit="contain" borderRadius="base"/>
-          </s-box>}
-          <s-section heading="Shopify quantities">
-            <s-stack direction="block" gap="base">
-              <s-divider/>
-              {connected && reading && !locationError && <Loading label="Checking Shopify quantities…"/>}
-              {(detailError || locationError) && <s-banner tone="warning" heading="Quantities unavailable">
-                {detailError || locationError}
-              </s-banner>}
-              {level && <s-stack direction="block" gap="small">
-                <s-stack direction="inline" gap="large" paddingBlock="small">
-                  <Quantity label="Available" value={level.available}/>
-                  <Quantity label="On hand" value={level.onHand}/>
-                  <Quantity label="Committed" value={level.committed}/>
-                </s-stack>
-                <s-text type="small" color="subdued">Checked {timeAt(level.checkedAt,location?.timeZone)}</s-text>
-              </s-stack>}
-            </s-stack>
-          </s-section>
-          <s-section heading="HotWax quantities">
-            <s-stack direction="block" gap="base">
-              <s-divider/>
-              {loadingHotWax && <Loading label="Checking HotWax quantities…"/>}
-              {unavailableHotWax && <s-banner tone="warning" heading="HotWax quantities unavailable">{unavailableHotWax}</s-banner>}
-              {hotWax && <s-stack direction="block" gap="small">
-                <s-stack direction="inline" gap="large" paddingBlock="small">
-                  <Quantity label="ATP" value={hotWax.atp}/>
-                  <Quantity label="Reservations" value={hotWax.reservations}/>
-                  <Quantity label="On hand (QOH)" value={hotWax.onHand}/>
-                </s-stack>
-                <s-text type="small" color="subdued">Checked {timeAt(hotWax.checkedAt,location?.timeZone)}</s-text>
-              </s-stack>}
-            </s-stack>
-          </s-section>
-          <InventoryHistory store={store} initialTab={initialTab}
+          <InventoryHistory store={store} initialTab={initialTab} productImageUrl={product.imageUrl}
             itemFilter={{id:itemId,loading:!itemId && reading,error:itemId ? undefined : detailError}}
             productFilter={{id:productId,loading:waitingForProduct,error:productError}}/>
           <s-section heading="Inventory actions">
@@ -577,7 +591,7 @@ function Loading({label}: {label: string}) {
 }
 
 function Quantity({label,value}: {label: string; value: number | null}) {
-  return <s-stack direction="block" gap="small-300">
+  return <s-stack direction="block" gap="small-300" inlineSize="33.33%">
     <s-text type="small" color="subdued">{label}</s-text>
     <s-heading>{units(value)}</s-heading>
   </s-stack>;

@@ -2,6 +2,7 @@ import {configureDirectOms, OmsConnection, OmsLookupError, rows, text, type OmsR
 import {shopFacility} from '../../../shared/oms-shop';
 import {INVENTORY_OMS, type InventoryScope} from '../../../shared/store-inventory';
 import {BASE, validId} from '../../../shared/oms-count';
+import {productSearchDetails} from '../../../shared/oms-count-products';
 import {reviewRows} from '../../../shared/oms-count-workflows';
 import {readEventSources} from './InventoryEventSources';
 
@@ -24,7 +25,9 @@ export type InventoryEvent = {
 };
 export type InventoryLevel = {available: number | null; onHand: number | null; committed: number | null; checkedAt: number};
 export type HotWaxLevel = {atp: number | null; reservations: number | null; onHand: number | null; checkedAt: number};
-export type ProposedVariance = {id: string; product: Variant; countName: string; counted: number; delta: number};
+export type ProposedVariance = {
+  id: string; product: Variant & {hotWaxProductId: string}; countName: string; counted: number; delta: number;
+};
 type GraphPage<Node> = {edges: {node: Node}[]; pageInfo: {hasNextPage: boolean; endCursor?: string | null}};
 type Reservation = {quantity: string | number | null};
 type StockItem = {
@@ -147,7 +150,30 @@ export async function proposedVariances(location: Location, signal: AbortSignal,
     }
     return proposals;
   }));
-  return byCount.flat();
+  const proposals = byCount.flat();
+  const missingImages = [...new Set(proposals.filter(({product})=>!product.imageUrl)
+    .map(({product})=>product.hotWaxProductId))];
+  if (!missingImages.length) return proposals;
+
+  const imageLookup = connection(location,signal);
+  const requests = [];
+  for (let offset = 0; offset < missingImages.length; offset += 200) {
+    requests.push(productSearchDetails(missingImages.slice(offset,offset+200),{
+      barcode:'',primary:'SKU',secondary:'productId',
+    },imageLookup));
+  }
+  const images = new Map<string,string>();
+  for (const result of await Promise.allSettled(requests)) {
+    if (result.status!=='fulfilled') continue;
+    for (const [id,product] of result.value) {
+      if (/^https:\/\//i.test(product.imageUrl)) images.set(id,product.imageUrl);
+    }
+  }
+  return proposals.map(proposal=>{
+    const {product} = proposal;
+    const imageUrl = product.imageUrl ?? images.get(product.hotWaxProductId);
+    return {...proposal,product:{...product,imageUrl}};
+  });
 }
 
 async function ledgerProducts(oms: OmsConnection, shopId: string, events: InventoryEvent[]) {
