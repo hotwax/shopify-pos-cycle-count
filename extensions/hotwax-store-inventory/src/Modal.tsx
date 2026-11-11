@@ -55,10 +55,12 @@ function useNow() {
 
 function eventTiming(event: InventoryEvent, now: number) {
   const hasCreatedAt = Number.isFinite(event.at) && event.at>0;
-  const age = hasCreatedAt ? 'Created '+duration(now-event.at)+' ago' : 'Creation time unavailable';
-  if (event.state!=='Synced') return age;
   const syncedAt = event.syncedAt;
-  const syncTime = hasCreatedAt && syncedAt!=null && Number.isFinite(syncedAt) && syncedAt>=event.at
+  const hasSyncTime = syncedAt!=null && Number.isFinite(syncedAt) && syncedAt>=event.at;
+  const checkedAt = event.state==='Synced' && hasSyncTime ? Math.max(now,syncedAt) : now;
+  const age = hasCreatedAt ? 'Created '+duration(checkedAt-event.at)+' ago' : 'Creation time unavailable';
+  if (event.state!=='Synced') return age;
+  const syncTime = hasCreatedAt && hasSyncTime
     ? 'Synced in '+duration(syncedAt-event.at) : 'Sync time unavailable';
   return age+' · '+syncTime;
 }
