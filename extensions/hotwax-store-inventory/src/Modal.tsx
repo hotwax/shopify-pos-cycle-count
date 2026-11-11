@@ -2,7 +2,8 @@ import '@shopify/ui-extensions/preact';
 import {render} from 'preact';
 import {useEffect, useRef, useState} from 'preact/hooks';
 import {inventoryScope, sameInventoryScope, type InventoryScope} from '../../../shared/store-inventory';
-import {inventoryLevel, inventoryLocation, searchInventory, unsentInventoryEvents, type InventoryEvent, type Variant} from './Inventory';
+import {hotWaxInventoryLevel, inventoryEventSources, inventoryLevel, inventoryLocation, recentInventoryEvents, searchInventory, type HotWaxLevel, type InventoryEvent, type Variant} from './Inventory';
+import {eventSourceKey, type EventSource} from './InventoryEventSources';
 
 type Location = Awaited<ReturnType<typeof inventoryLocation>>;
 type ProductPage = {owner: string; product: Variant};
@@ -26,6 +27,27 @@ function timeAt(value: number, timeZone?: string) {
   const options: Intl.DateTimeFormatOptions = {month:'short',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'};
   try {return new Intl.DateTimeFormat(undefined,{...options,timeZone}).format(value);}
   catch {return new Intl.DateTimeFormat(undefined,options).format(value);}
+}
+
+function duration(milliseconds: number) {
+  const seconds = Math.max(0,Math.floor(milliseconds/1000));
+  const minutes = Math.floor(seconds/60);
+  const hours = Math.floor(minutes/60);
+  const days = Math.floor(hours/24);
+  if (days) return days+'d'+(hours%24 ? ' '+hours%24+'h' : '');
+  if (hours) return hours+'h'+(minutes%60 ? ' '+minutes%60+'m' : '');
+  if (minutes) return minutes+'m'+(seconds%60 ? ' '+seconds%60+'s' : '');
+  return seconds+'s';
+}
+
+function eventTiming(event: InventoryEvent, now: number) {
+  const hasCreatedAt = Number.isFinite(event.at) && event.at>0;
+  const age = hasCreatedAt ? 'Created '+duration(now-event.at)+' ago' : 'Creation time unavailable';
+  if (event.state!=='Synced') return age;
+  const syncedAt = event.syncedAt;
+  const syncTime = hasCreatedAt && syncedAt!=null && Number.isFinite(syncedAt) && syncedAt>=event.at
+    ? 'Synced in '+duration(syncedAt-event.at) : 'Sync time unavailable';
+  return age+' · '+syncTime;
 }
 
 export default () => {
@@ -115,19 +137,29 @@ function InventoryHome({scope,owner}: {scope: InventoryScope; owner: string}) {
   const {connected,location,locationError,refreshLocation} = useStoreLocation(scope);
   const {open,navigationError} = useScreenNavigation(owner);
   const [events,setEvents] = useState<InventoryEvent[]>([]);
+  const [sources,setSources] = useState(new Map<string,EventSource>());
+  const [showSynced,setShowSynced] = useState(false);
+  const [now,setNow] = useState(Date.now);
   const [visibleCount,setVisibleCount] = useState(EVENT_ROWS_PER_PAGE);
   const [reading,setReading] = useState(true);
   const [listError,setListError] = useState('');
+  const visibleEvents = showSynced ? events : events.filter(event=>event.state!=='Synced');
+
+  useEffect(()=>{
+    const timer = setInterval(()=>setNow(Date.now()),15000);
+    return ()=>clearInterval(timer);
+  },[]);
 
   useEffect(()=>{
     if (!connected || !location) return;
     const controller = new AbortController();
     setReading(true);
     setListError('');
-    unsentInventoryEvents(location,controller.signal)
+    recentInventoryEvents(location,controller.signal)
       .then(result=>{
         if (!controller.signal.aborted) {
           setEvents(result);
+          setSources(new Map());
           setVisibleCount(EVENT_ROWS_PER_PAGE);
         }
       })
@@ -138,6 +170,17 @@ function InventoryHome({scope,owner}: {scope: InventoryScope; owner: string}) {
     return ()=>controller.abort();
   },[connected,location]);
 
+  useEffect(()=>{
+    if (!connected || !location) return;
+    const missing = visibleEvents.slice(0,visibleCount).filter(event=>event.reference && !sources.has(eventSourceKey(event)));
+    if (!missing.length) return;
+    const controller = new AbortController();
+    inventoryEventSources(location,missing,controller.signal).then(result=>{
+      if (!controller.signal.aborted) setSources(previous=>new Map([...previous,...result]));
+    }).catch(()=>{});
+    return ()=>controller.abort();
+  },[connected,location,events,showSynced,visibleCount]);
+
   const loading = connected && !locationError && (!location || reading);
   const error = locationError || listError;
   return <s-page heading="Store inventory" subheading={location?.name}>
@@ -147,20 +190,27 @@ function InventoryHome({scope,owner}: {scope: InventoryScope; owner: string}) {
         <s-stack direction="block" gap="base">
           {!connected && <OfflineBanner/>}
           {navigationError && <s-banner tone="warning" heading={navigationError}/>}
-          <s-section heading="Unsent inventory changes">
+          <s-section heading={showSynced?'Inventory changes':'Unsent inventory changes'}>
             <s-button slot="secondary-actions" variant="secondary" disabled={!connected || loading} onClick={refreshLocation}>Refresh</s-button>
             <s-stack direction="block" gap="small">
+              <s-switch label="Show synced" checked={showSynced} onChange={event=>{
+                setShowSynced(Boolean(event.currentTarget.checked));setVisibleCount(EVENT_ROWS_PER_PAGE);
+              }}/>
               {error && <s-banner tone="warning" heading="Inventory ledger unavailable">{error}</s-banner>}
               {loading && <Loading label="Loading inventory…"/>}
-              {!loading && connected && !error && !events.length &&
-                <s-text color="subdued">No unsent changes in recent inventory events.</s-text>}
-              {events.slice(0,visibleCount).map(event=><Row key={event.id}
-                title={event.product?.title ?? 'Inventory item '+event.itemId}
-                subtitle={event.product ? labelFor(event.product) : ''}
-                detail={[event.source,event.reference,timeAt(event.at,location?.timeZone)].filter(Boolean).join(' · ')}
-                imageUrl={event.product?.imageUrl} value={signed(event.delta)} state={event.state}
-                onClick={()=>open(PRODUCT_SCREEN,event.product ?? {itemId:event.itemId,title:'Inventory item '+event.itemId})}/>)}
-              {visibleCount < events.length && <s-stack direction="inline">
+              {!loading && connected && !error && !visibleEvents.length &&
+                <s-text color="subdued">{showSynced?'No recent inventory changes.':'No unsent changes in recent inventory events.'}</s-text>}
+              {visibleEvents.slice(0,visibleCount).map(event=>{
+                const source = sources.get(eventSourceKey(event));
+                const record = source?.name || [event.source,event.reference].filter(Boolean).join(' ');
+                return <Row key={event.id}
+                  title={event.product?.title ?? 'Inventory item '+event.itemId}
+                  subtitle={event.product ? labelFor(event.product) : ''}
+                  detail={[record,source?.actor].filter(Boolean).join(' · ')} timing={eventTiming(event,now)}
+                  imageUrl={event.product?.imageUrl} value={signed(event.delta)} state={event.state}
+                  onClick={()=>open(PRODUCT_SCREEN,event.product ?? {itemId:event.itemId,title:'Inventory item '+event.itemId})}/>;
+              })}
+              {visibleCount < visibleEvents.length && <s-stack direction="inline">
                 <s-button variant="secondary" onClick={()=>setVisibleCount(count=>count+EVENT_ROWS_PER_PAGE)}>Load more</s-button>
               </s-stack>}
             </s-stack>
@@ -194,7 +244,7 @@ function ProductSearch({scope,owner}: {scope: InventoryScope; owner: string}) {
     const found = result.items.flatMap(product=>product.variants.map(variant=>({
       title:product.title,option:product.hasOnlyDefaultVariant?undefined:variant.title,
       sku:variant.sku,barcode:variant.barcode,variantId:String(variant.id),
-      imageUrl:variant.image || product.featuredImage,
+      imageUrl:variant.image || product.featuredImage,available:null,
     })));
     const exact = found.filter(product=>product.sku?.toLowerCase()===query.toLowerCase() || product.barcode===query);
     return {items:scan ? found.filter(product=>product.barcode===scan) : exact.length ? exact : found,
@@ -270,7 +320,8 @@ function ProductSearch({scope,owner}: {scope: InventoryScope; owner: string}) {
               {loading && !products.length && <Loading label="Finding products…"/>}
               {!loading && !listError && !products.length && <s-text color="subdued">No matching products.</s-text>}
               {products.map(product=><Row key={product.variantId} title={product.title} subtitle={labelFor(product)}
-                imageUrl={product.imageUrl} onClick={()=>open(PRODUCT_SCREEN,product)}/>)}
+                imageUrl={product.imageUrl} value={product.available==null?'—':String(product.available)} valueLabel="Available"
+                onClick={()=>open(PRODUCT_SCREEN,product)}/>)}
               {cursor && <s-stack direction="inline">
                 <s-button variant="secondary" disabled={loading} onClick={loadMore}>Load more</s-button>
               </s-stack>}
@@ -287,8 +338,12 @@ function ProductDetail({scope,selected}: {scope: InventoryScope; selected: Varia
   const [snapshot,setSnapshot] = useState<Awaited<ReturnType<typeof inventoryLevel>>>();
   const [reading,setReading] = useState(true);
   const [detailError,setDetailError] = useState('');
+  const [hotWax,setHotWax] = useState<HotWaxLevel>();
+  const [readingHotWax,setReadingHotWax] = useState(false);
+  const [hotWaxError,setHotWaxError] = useState('');
   const product = snapshot?.product ?? selected;
   const level = snapshot?.level;
+  const variantId = selected.variantId ?? snapshot?.product.variantId;
 
   useEffect(()=>{
     if (!location || !connected) return;
@@ -302,6 +357,23 @@ function ProductDetail({scope,selected}: {scope: InventoryScope; selected: Varia
     return ()=>controller.abort();
   },[selected,location,connected]);
 
+  useEffect(()=>{
+    if (!variantId || !location || !connected) return;
+    const controller = new AbortController();
+    setReadingHotWax(true);
+    setHotWaxError('');
+    hotWaxInventoryLevel(location,variantId,selected.itemId,controller.signal)
+      .then(result=>{if (!controller.signal.aborted) setHotWax(result);})
+      .catch(cause=>{
+        if (!controller.signal.aborted) setHotWaxError(errorText(cause,'HotWax quantities could not be loaded.'));
+      })
+      .finally(()=>{if (!controller.signal.aborted) setReadingHotWax(false);});
+    return ()=>controller.abort();
+  },[variantId,selected.itemId,location,connected]);
+
+  const loadingHotWax = connected && !locationError && (readingHotWax || (!variantId && reading) || !location);
+  const unavailableHotWax = hotWaxError || locationError || (!variantId && !reading ? 'HotWax needs a confirmed Shopify variant for this item.' : '');
+
   return <s-page heading="Product details" subheading={location?.name}>
     <s-scroll-box>
       <s-box padding="large">
@@ -311,6 +383,9 @@ function ProductDetail({scope,selected}: {scope: InventoryScope; selected: Varia
             <s-heading>{product.title}</s-heading>
             {labelFor(product) && <s-text color="subdued">{labelFor(product)}</s-text>}
           </s-stack>
+          {product.imageUrl && <s-box inlineSize="256px" maxInlineSize="100%" blockSize="256px">
+            <s-image src={product.imageUrl} objectFit="contain" borderRadius="base"/>
+          </s-box>}
           <s-section heading="Shopify quantities">
             <s-stack direction="block" gap="base">
               <s-divider/>
@@ -325,6 +400,21 @@ function ProductDetail({scope,selected}: {scope: InventoryScope; selected: Varia
                   <Quantity label="Committed" value={level.committed}/>
                 </s-stack>
                 <s-text type="small" color="subdued">Checked {timeAt(level.checkedAt,location?.timeZone)}</s-text>
+              </s-stack>}
+            </s-stack>
+          </s-section>
+          <s-section heading="HotWax quantities">
+            <s-stack direction="block" gap="base">
+              <s-divider/>
+              {loadingHotWax && <Loading label="Checking HotWax quantities…"/>}
+              {unavailableHotWax && <s-banner tone="warning" heading="HotWax quantities unavailable">{unavailableHotWax}</s-banner>}
+              {hotWax && <s-stack direction="block" gap="small">
+                <s-stack direction="inline" gap="large" paddingBlock="small">
+                  <Quantity label="ATP" value={hotWax.atp}/>
+                  <Quantity label="Reservations" value={hotWax.reservations}/>
+                  <Quantity label="On hand (QOH)" value={hotWax.onHand}/>
+                </s-stack>
+                <s-text type="small" color="subdued">Checked {timeAt(hotWax.checkedAt,location?.timeZone)}</s-text>
               </s-stack>}
             </s-stack>
           </s-section>
@@ -366,8 +456,9 @@ function Quantity({label,value}: {label: string; value: number | null}) {
   </s-stack>;
 }
 
-function Row({title,subtitle,detail,imageUrl,state,value,onClick}: {
-  title: string; subtitle: string; detail?: string; imageUrl?: string; state?: string; value?: string; onClick: () => void;
+function Row({title,subtitle,detail,timing,imageUrl,state,value,valueLabel,onClick}: {
+  title: string; subtitle: string; detail?: string; timing?: string; imageUrl?: string;
+  state?: string; value?: string; valueLabel?: string; onClick: () => void;
 }) {
   return <s-stack direction="block">
     <s-divider/>
@@ -381,11 +472,17 @@ function Row({title,subtitle,detail,imageUrl,state,value,onClick}: {
             <s-text type="strong">{title}</s-text>
             {subtitle && <s-text type="small" color="subdued">{subtitle}</s-text>}
             {detail && <s-text type="small" color="subdued">{detail}</s-text>}
+            {timing && <s-text type="small" color="subdued">{timing}</s-text>}
           </s-stack>
         </s-stack>
         <s-stack direction="inline" alignItems="center" gap="small">
-          {value && <s-text type="strong">{value}</s-text>}
-          {state && <s-badge tone={state==='Needs attention'?'warning':'neutral'}>{state}</s-badge>}
+          {state && <s-badge tone={state==='Synced'?'success':state==='Needs attention'?'warning':'neutral'}>{state}</s-badge>}
+          {value && <s-box minInlineSize={valueLabel?'64px':'48px'}>
+            <s-stack direction="block" alignItems="end" gap="small-300">
+              {valueLabel && <s-text type="small" color="subdued">{valueLabel}</s-text>}
+              <s-text type="strong">{value}</s-text>
+            </s-stack>
+          </s-box>}
           <s-icon type="chevron-right" color="subdued"/>
         </s-stack>
       </s-stack>
