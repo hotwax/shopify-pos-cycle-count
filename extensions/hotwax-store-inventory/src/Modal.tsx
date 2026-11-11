@@ -154,13 +154,14 @@ function InventoryHome({scope,owner}: {scope: InventoryScope; owner: string}) {
   const store = useStoreLocation(scope);
   const {open,navigationError} = useScreenNavigation(owner);
   return <s-page heading="Store inventory" subheading={store.location?.name}>
-    <s-button slot="secondary-actions" variant="secondary" onClick={()=>open(SEARCH_SCREEN)}>Search</s-button>
+    <RefreshAction store={store}/>
     <s-scroll-box>
       <s-box padding="large">
         <s-stack direction="block" gap="base">
           {!store.connected && <OfflineBanner/>}
           {navigationError && <s-banner tone="warning" heading={navigationError}/>}
-          <InventoryHistory store={store} openProduct={(product,tab)=>open(PRODUCT_SCREEN,product,tab)}/>
+          <InventoryHistory store={store} onSearch={()=>open(SEARCH_SCREEN)}
+            openProduct={(product,tab)=>open(PRODUCT_SCREEN,product,tab)}/>
         </s-stack>
       </s-box>
     </s-scroll-box>
@@ -173,8 +174,14 @@ type ListFilter = {id?: string; loading: boolean; error?: string};
 type SalesRead = {data?: StoreSales; error?: string; loading: boolean};
 type VarianceRead = {data?: ProposedVariance[]; error?: string; loading: boolean};
 
-function InventoryHistory({store,openProduct,initialTab='events',itemFilter,productFilter,productImageUrl,pushScope,sales,varianceRead}: {
+function RefreshAction({store}: {store: Store}) {
+  return <s-button slot="secondary-actions" variant="secondary" aria-label="Refresh inventory"
+    disabled={!store.connected} onClick={store.refreshLocation}>↻</s-button>;
+}
+
+function InventoryHistory({store,onSearch,openProduct,initialTab='events',itemFilter,productFilter,productImageUrl,pushScope,sales,varianceRead}: {
   store: Store; openProduct?: (product: Variant,tab: HistoryTab) => void;
+  onSearch?: () => void;
   initialTab?: HistoryTab; itemFilter?: ListFilter; productFilter?: ListFilter; productImageUrl?: string;
   pushScope?: InventoryScope;
   sales?: SalesRead;
@@ -182,7 +189,7 @@ function InventoryHistory({store,openProduct,initialTab='events',itemFilter,prod
 }) {
   const [tab,setTab] = useState(initialTab);
   return <s-section heading="Inventory changes">
-    <s-button slot="secondary-actions" variant="secondary" disabled={!store.connected} onClick={store.refreshLocation}>Refresh</s-button>
+    {onSearch && <s-button slot="secondary-actions" variant="secondary" onClick={onSearch}>Search</s-button>}
     <s-tabs value={tab} onChange={event=>{
       const value = event.currentTarget.value;
       if (value==='events' || value==='proposals' || (value==='sales' && sales)) setTab(value);
@@ -678,6 +685,7 @@ function ProductDetail({scope,selected,initialTab}: {scope: InventoryScope; sele
     (waitingForProduct || waitingForBaselines || varianceRead.loading);
 
   return <s-page heading="Product details" subheading={location?.name}>
+    <RefreshAction store={store}/>
     <s-scroll-box>
       <s-box padding="large">
         <s-stack direction="block" gap="large">
