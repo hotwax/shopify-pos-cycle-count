@@ -169,12 +169,14 @@ type Store = ReturnType<typeof useStoreLocation>;
 type ListFilter = {id?: string; loading: boolean; error?: string};
 
 type SalesRead = {data?: StoreSales; error?: string; loading: boolean};
+type VarianceRead = {data?: ProposedVariance[]; error?: string; loading: boolean};
 
-function InventoryHistory({store,openProduct,initialTab='events',itemFilter,productFilter,productImageUrl,pushScope,sales}: {
+function InventoryHistory({store,openProduct,initialTab='events',itemFilter,productFilter,productImageUrl,pushScope,sales,varianceRead}: {
   store: Store; openProduct?: (product: Variant,tab: HistoryTab) => void;
   initialTab?: HistoryTab; itemFilter?: ListFilter; productFilter?: ListFilter; productImageUrl?: string;
   pushScope?: InventoryScope;
   sales?: SalesRead;
+  varianceRead?: VarianceRead;
 }) {
   const [tab,setTab] = useState(initialTab);
   return <s-section heading="Inventory changes">
@@ -193,7 +195,8 @@ function InventoryHistory({store,openProduct,initialTab='events',itemFilter,prod
           productImageUrl={productImageUrl} pushScope={pushScope}/>}
       </s-tab-panel>
       <s-tab-panel id="proposals">
-        {tab==='proposals' && <ProposedVarianceList store={store} filter={productFilter} openProduct={openProduct} productImageUrl={productImageUrl}/>}
+        {tab==='proposals' && <ProposedVarianceList store={store} filter={productFilter} openProduct={openProduct}
+          productImageUrl={productImageUrl} varianceRead={varianceRead}/>}
       </s-tab-panel>
       {sales && <s-tab-panel id="sales">
         {tab==='sales' && <PendingSales sales={sales} connected={store.connected}/>}
@@ -339,52 +342,56 @@ function InventoryEventList({store,filter,openProduct,productImageUrl,pushScope}
   </s-stack>;
 }
 
-function ProposedVarianceList({store,filter,openProduct,productImageUrl}: {
-  store: Store; filter?: ListFilter; openProduct?: (product: Variant,tab: HistoryTab) => void; productImageUrl?: string;
-}) {
+function useProposedVarianceRead(store: Store, productId: string | undefined, enabled: boolean): VarianceRead {
   const {connected,location,locationError} = store;
-  const productId = filter?.id;
-  const canRead = !filter || Boolean(productId);
-  const [proposals,setProposals] = useState<ProposedVariance[]>([]);
-  const [reading,setReading] = useState(true);
-  const [listError,setListError] = useState('');
-  const [visibleCount,setVisibleCount] = useState(EVENT_ROWS_PER_PAGE);
-  const now = useNow();
-
+  const [result,setResult] = useState<{location: Location; productId?: string; data?: ProposedVariance[]; error?: string}>();
   useEffect(()=>{
-    if (!connected || !location || !canRead) return;
+    if (!connected || !location || !enabled) return;
     const controller = new AbortController();
-    setReading(true);
-    setListError('');
+    setResult(undefined);
     proposedVariances(location,controller.signal,productId)
-      .then(result=>{
-        if (controller.signal.aborted) return;
-        setProposals(result);
-        setVisibleCount(EVENT_ROWS_PER_PAGE);
+      .then(data=>{
+        if (!controller.signal.aborted) setResult({location,productId,data});
       })
       .catch(cause=>{
-        if (controller.signal.aborted) return;
-        setProposals([]);
-        setListError(errorText(cause,'HotWax could not load cycle count variances.'));
-      })
-      .finally(()=>{if (!controller.signal.aborted) setReading(false);});
+        if (!controller.signal.aborted) {
+          setResult({location,productId,error:errorText(cause,'HotWax could not load cycle count variances.')});
+        }
+      });
     return ()=>controller.abort();
-  },[connected,location,canRead,productId]);
+  },[connected,location,enabled,productId]);
 
-  const error = locationError || filter?.error || listError;
-  const loading = connected && !error && (!location || filter?.loading || (canRead && reading));
+  const current = enabled && result && result.location===location && result.productId===productId ? result : undefined;
+  return {data:current?.data,error:locationError || current?.error,
+    loading:enabled && connected && !locationError && !current};
+}
+
+function ProposedVarianceList({store,filter,openProduct,productImageUrl,varianceRead}: {
+  store: Store; filter?: ListFilter; openProduct?: (product: Variant,tab: HistoryTab) => void;
+  productImageUrl?: string; varianceRead?: VarianceRead;
+}) {
+  const {connected,location} = store;
+  const homeRead = useProposedVarianceRead(store,undefined,!varianceRead);
+  const read = varianceRead ?? homeRead;
+  const proposals = read.data ?? [];
+  const [visibleCount,setVisibleCount] = useState(EVENT_ROWS_PER_PAGE);
+  const now = useNow();
+  useEffect(()=>setVisibleCount(EVENT_ROWS_PER_PAGE),[read.data]);
+
+  const error = filter?.error || read.error;
+  const loading = connected && !error && (!location || filter?.loading || read.loading);
   return <s-stack direction="block" gap="small" paddingBlock="base">
     {error && <s-banner tone="warning" heading="Proposed variances unavailable">{error}</s-banner>}
     {loading && <Loading label="Loading proposed variances…"/>}
     {!loading && connected && !error && !proposals.length &&
       <s-text color="subdued">No cycle count changes awaiting approval.</s-text>}
-    {canRead && proposals.slice(0,visibleCount).map(({id,product,countName,counted,delta,lastUpdatedAt})=>
+    {proposals.slice(0,visibleCount).map(({id,product,countName,counted,delta,lastUpdatedAt})=>
       <Row key={id} title={filter ? countName : product.title}
         subtitle={filter ? undefined : countName} detail={'Counted '+counted}
         timing={lastUpdatedAt && lastUpdatedAt<=now ? 'Waiting about '+duration(now-lastUpdatedAt) : 'Wait time unavailable'}
         imageUrl={productImageUrl ?? product.imageUrl} value={signed(delta)} state="Awaiting approval"
         onClick={openProduct ? ()=>openProduct(product,'proposals') : undefined}/>)}
-    {canRead && visibleCount < proposals.length && <s-stack direction="inline">
+    {visibleCount < proposals.length && <s-stack direction="inline">
       <s-button variant="secondary" onClick={()=>setVisibleCount(count=>count+EVENT_ROWS_PER_PAGE)}>Load more</s-button>
     </s-stack>}
   </s-stack>;
@@ -616,9 +623,19 @@ function ProductDetail({scope,selected,initialTab}: {scope: InventoryScope; sele
   const loadingHotWax = connected && !locationError && (readingHotWax || waitingForProduct || !location);
   const unavailableHotWax = hotWaxError || locationError || productError;
   const afterSales = sales.data?.impact;
-  const projectedAtp = hotWax?.atp!=null && afterSales && variantId ? hotWax.atp-afterSales.atp : null;
-  const projectedQoh = hotWax?.onHand!=null && afterSales && variantId ? hotWax.onHand-afterSales.onHand : null;
   const checkingShopifyProjection = connected && Boolean(itemId) && !shopifyProjection && !shopifyProjectionError;
+  // Read open approvals after the balances and queue. An approval already
+  // reflected in either read should have left the open list by this point.
+  const waitingForBaselines = reading || (Boolean(level) && checkingShopifyProjection) ||
+    (Boolean(productId) && (readingHotWax || (!hotWax && !hotWaxError)));
+  const varianceRead = useProposedVarianceRead(store,productId,Boolean(productId) && !waitingForBaselines);
+  const proposedDelta = varianceRead.data?.reduce((total,variance)=>total+variance.delta,0) ?? null;
+  const afterApproval = (quantity: number | null | undefined) =>
+    quantity==null || proposedDelta===null ? null : quantity+proposedDelta;
+  const projectedAtp = afterApproval(hotWax?.atp!=null && afterSales ? hotWax.atp-afterSales.atp : null);
+  const projectedQoh = afterApproval(hotWax?.onHand!=null && afterSales ? hotWax.onHand-afterSales.onHand : null);
+  const checkingVariances = connected && !locationError && !productError &&
+    (waitingForProduct || waitingForBaselines || varianceRead.loading);
 
   return <s-page heading="Product details" subheading={location?.name}>
     <s-scroll-box>
@@ -646,12 +663,14 @@ function ProductDetail({scope,selected,initialTab}: {scope: InventoryScope; sele
                     </s-banner>}
                     {level && <>
                       <s-stack direction="inline">
-                        <Quantity label="Available" value={level.available} projected={shopifyProjection?.available ?? null} projecting={checkingShopifyProjection}/>
-                        <Quantity label="On hand" value={level.onHand} projected={shopifyProjection?.onHand ?? null} projecting={checkingShopifyProjection}/>
+                        <Quantity label="Available" value={level.available} projected={afterApproval(shopifyProjection?.available)}
+                          projecting={checkingShopifyProjection || checkingVariances}/>
+                        <Quantity label="On hand" value={level.onHand} projected={afterApproval(shopifyProjection?.onHand)}
+                          projecting={checkingShopifyProjection || checkingVariances}/>
                         <Quantity label="Committed" value={level.committed}/>
                       </s-stack>
                       {shopifyProjectionError && <s-text type="small" color="subdued">{shopifyProjectionError}</s-text>}
-                      <s-text type="small" color="subdued">Checked {ago(level.checkedAt,now)} · To be after Shopify sync</s-text>
+                      <s-text type="small" color="subdued">Checked {ago(level.checkedAt,now)} · After sync and count approval</s-text>
                     </>}
                   </s-stack>
                   <s-divider/>
@@ -661,22 +680,24 @@ function ProductDetail({scope,selected,initialTab}: {scope: InventoryScope; sele
                     {unavailableHotWax && <s-banner tone="warning" heading="HotWax quantities unavailable">{unavailableHotWax}</s-banner>}
                     {hotWax && <>
                       <s-stack direction="inline">
-                        <Quantity label="ATP" value={hotWax.atp} projected={projectedAtp} projecting={sales.loading && connected}/>
-                        <Quantity label="On hand (QOH)" value={hotWax.onHand} projected={projectedQoh} projecting={sales.loading && connected}/>
+                        <Quantity label="ATP" value={hotWax.atp} projected={projectedAtp} projecting={(sales.loading && connected) || checkingVariances}/>
+                        <Quantity label="On hand (QOH)" value={hotWax.onHand} projected={projectedQoh} projecting={(sales.loading && connected) || checkingVariances}/>
                         <Quantity label="Reservations" value={hotWax.reservations}/>
                       </s-stack>
-                      <s-text type="small" color="subdued">Checked {ago(hotWax.checkedAt,now)} · To be after POS imports</s-text>
+                      <s-text type="small" color="subdued">Checked {ago(hotWax.checkedAt,now)} · After POS imports and count approval</s-text>
                       {!sales.loading && !afterSales && <s-text type="small" color="subdued">See POS sales for the import check.</s-text>}
                     </>}
                   </s-stack>
+                  {(varianceRead.error || productError) && !locationError &&
+                    <s-text type="small" color="subdued">The projection needs this product’s proposed variances.</s-text>}
                 </s-stack>
               </s-section>
             </s-box>
           </s-stack>
           <InventoryHistory store={store} initialTab={initialTab} productImageUrl={product.imageUrl} pushScope={scope}
-            sales={locationError ? {loading:false,error:locationError} : sales}
+            sales={locationError ? {loading:false,error:locationError} : sales} varianceRead={varianceRead}
             itemFilter={{id:itemId,loading:!itemId && reading,error:itemId ? undefined : detailError}}
-            productFilter={{id:productId,loading:waitingForProduct,error:productError}}/>
+            productFilter={{id:productId,loading:waitingForProduct || waitingForBaselines,error:productError}}/>
           <s-section heading="Inventory actions">
             <s-stack direction="block" gap="small">
               <s-stack direction="inline" gap="base">
