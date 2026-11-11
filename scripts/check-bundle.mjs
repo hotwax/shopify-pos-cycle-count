@@ -5,7 +5,7 @@ import {brotliCompressSync, constants} from 'node:zlib';
 // Fail the build first, keeping a small margin.
 const LIMIT = 64 * 1024, MARGIN = 512;
 let failed = false;
-for (const handle of ['hotwax-cycle-count', 'app-home']) {
+for (const handle of ['hotwax-cycle-count', 'app-home', 'hotwax-store-inventory']) {
   const bytes = brotliCompressSync(readFileSync(`extensions/${handle}/dist/${handle}.js`), {
     params: {[constants.BROTLI_PARAM_QUALITY]: 11},
   }).length;
