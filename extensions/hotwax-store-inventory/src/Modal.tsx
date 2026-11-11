@@ -97,6 +97,7 @@ function Workspace({scope}: {scope: InventoryScope}) {
     const found = result.items.flatMap(product=>product.variants.map(variant=>({
       title:product.title,option:product.hasOnlyDefaultVariant?undefined:variant.title,
       sku:variant.sku,barcode:variant.barcode,variantId:String(variant.id),
+      imageUrl:variant.image || product.featuredImage,
     })));
     const exact = found.filter(product=>product.sku?.toLowerCase()===query.toLowerCase() || product.barcode===query);
     return {items:scan ? found.filter(product=>product.barcode===scan) : exact.length ? exact : found,
@@ -258,7 +259,7 @@ function Workspace({scope}: {scope: InventoryScope}) {
                     <s-icon type={search?'search':'inventory-list'} color="subdued"/>
                     <s-text color="subdued">{search?'No matching products.':tab==='queue'?'No updates are waiting to be published.':'No recent events at this location.'}</s-text>
                   </s-stack>}
-                {search ? products.map(product=><Row key={product.variantId} title={product.title} subtitle={labelFor(product)}
+                {search ? products.map(product=><Row key={product.variantId} title={product.title} subtitle={labelFor(product)} imageUrl={product.imageUrl}
                   onClick={()=>select(product)}/>) : events.map(event=><Row key={event.id} title={event.product?.title ?? event.source}
                   subtitle={[event.product && labelFor(event.product),event.reference,timeAt(event.at,location?.timeZone)].filter(Boolean).join(' · ')}
                   value={signed(event.delta)} state={event.state}
@@ -294,14 +295,21 @@ function Quantity({label,value}: {label: string; value: number | null}) {
   </s-stack>;
 }
 
-function Row({title,subtitle,state,value,onClick}: {title: string; subtitle: string; state?: string; value?: string; onClick: () => void}) {
+function Row({title,subtitle,imageUrl,state,value,onClick}: {
+  title: string; subtitle: string; imageUrl?: string; state?: string; value?: string; onClick: () => void;
+}) {
   return <s-stack direction="block">
     <s-divider/>
     <s-clickable onClick={onClick}>
       <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base" paddingBlock="base" paddingInline="small">
-        <s-stack direction="block" gap="small-300">
-          <s-text type="strong">{title}</s-text>
-          {subtitle && <s-text type="small" color="subdued">{subtitle}</s-text>}
+        <s-stack direction="inline" alignItems="center" gap="base">
+          {imageUrl && <s-box inlineSize="48px" minInlineSize="48px" blockSize="48px">
+            <s-image src={imageUrl} objectFit="contain"/>
+          </s-box>}
+          <s-stack direction="block" gap="small-300">
+            <s-text type="strong">{title}</s-text>
+            {subtitle && <s-text type="small" color="subdued">{subtitle}</s-text>}
+          </s-stack>
         </s-stack>
         <s-stack direction="inline" alignItems="center" gap="small">
           {value && <s-text type="strong">{value}</s-text>}

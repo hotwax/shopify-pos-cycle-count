@@ -10,19 +10,24 @@ type Location = {
   token: string;
 };
 
-export type Variant = {variantId?: string; itemId?: string; title: string; option?: string; sku?: string; barcode?: string};
+export type Variant = {variantId?: string; itemId?: string; title: string; option?: string; sku?: string; barcode?: string; imageUrl?: string};
 export type InventoryEvent = {id: string; itemId: string; source: string; reference: string; at: number; delta: number; state: string; product?: Variant};
 export type InventoryLevel = {available: number | null; onHand: number | null; committed: number | null; checkedAt: number};
 type Ledger = {details: unknown; hasMore?: boolean};
 type Quantities = {name: string; quantity: number}[];
 type ItemNode = {id: string; inventoryLevel?: {quantities: Quantities}; variant?: VariantNode};
+type MediaPreview = {preview?: {image?: {url: string} | null} | null};
 type VariantNode = {
-  id: string; title: string; sku?: string; barcode?: string; product: {title: string}; inventoryItem?: ItemNode;
+  id: string; title: string; sku?: string; barcode?: string;
+  product: {title: string; featuredMedia?: MediaPreview | null};
+  inventoryItem?: ItemNode;
+  media?: {nodes: MediaPreview[]};
 };
 
 const LEDGER = '/rest/s1/sob/shopify/locationInventoryAdjustmentDetails';
 const LEVELS = 'inventoryLevel(locationId: $location) { quantities(names: ["available", "on_hand", "committed"]) { name quantity } }';
 const VARIANT_FIELDS = 'id title sku product { title }';
+const SEARCH_IMAGE = 'preview { image { url(transform: {maxWidth: 144, maxHeight: 144}) } }';
 
 export async function inventoryLocation(scope: InventoryScope, getSessionToken: () => Promise<string | undefined>, signal: AbortSignal): Promise<Location> {
   const token = await getSessionToken();
@@ -99,7 +104,11 @@ export async function searchInventory(location: Location, query: string, barcode
     shopId:location.shopId,
     queryText:`query StoreInventorySearch($after: String, $filter: String!) {
       productVariants(first: 20, after: $after, query: $filter) {
-        nodes { ${VARIANT_FIELDS} barcode inventoryItem { id } }
+        nodes {
+          id title sku barcode inventoryItem { id }
+          media(first: 1) { nodes { ${SEARCH_IMAGE} } }
+          product { title featuredMedia { ${SEARCH_IMAGE} } }
+        }
         pageInfo { endCursor hasNextPage }
       }
     }`,
@@ -112,6 +121,7 @@ export async function searchInventory(location: Location, query: string, barcode
   const items = page.nodes.filter(node=>!barcode || node.barcode===barcode).map(node=>({
     title:node.product.title,option:node.title==='Default Title'?undefined:node.title,sku:node.sku,barcode:node.barcode,
     variantId:node.id.split('/').at(-1),itemId:node.inventoryItem?.id.split('/').at(-1),
+    imageUrl:node.media?.nodes[0]?.preview?.image?.url ?? node.product.featuredMedia?.preview?.image?.url,
   }));
   return {items,cursor:page.pageInfo.hasNextPage?page.pageInfo.endCursor:undefined};
 }
