@@ -6,7 +6,7 @@ import {
   hotWaxInventoryLevel, hotWaxProductForVariant, inventoryEventSources, inventoryLevel, inventoryLocation,
   productSyncEvents, proposedVariances, pushInventoryBatches, queuedInventoryBatches, recentInventoryEvents,
   searchInventory, shopifyVariantForHotWaxProduct,
-  type HotWaxLevel, type InventoryEvent, type ProposedVariance, type Variant,
+  type BatchProgress, type HotWaxLevel, type InventoryEvent, type ProposedVariance, type Variant,
 } from './Inventory';
 import {eventSourceKey, type EventSource} from './InventoryEventSources';
 import {projectShopify, recentStoreSales, type StoreSales} from './InventoryProjection';
@@ -246,11 +246,23 @@ function InventoryEventList({store,filter,openProduct,productImageUrl,pushScope}
   const [listError,setListError] = useState('');
   const [pushing,setPushing] = useState(false);
   const [pushResult,setPushResult] = useState<{sent: number; error: string}>();
+  const [activeBatchIds,setActiveBatchIds] = useState(new Set<string>());
+  const [batchProgress,setBatchProgress] = useState(new Map<string,BatchProgress>());
+  const [dimmingSynced,setDimmingSynced] = useState(false);
   const pushRequest = useRef<AbortController>();
-  const visibleEvents = showSynced ? events : events.filter(event=>event.state!=='Synced');
-  const batchIds = pushScope ? queuedInventoryBatches(events) : [];
+  const completionTimer = useRef<ReturnType<typeof setTimeout>>();
+  const eventRows = events.map(event=>{
+    const progress = batchProgress.get(event.messageId);
+    return progress ? {...event,state:progress.state,syncedAt:progress.syncedAt} : event;
+  });
+  const visibleEvents = eventRows.filter(event=>showSynced || event.state!=='Synced' || activeBatchIds.has(event.messageId));
+  const batchIds = pushScope ? queuedInventoryBatches(eventRows) : [];
+  const hasUnsentEvents = eventRows.some(event=>event.state!=='Synced' && event.state!=='Cancelled');
 
-  useEffect(()=>()=>pushRequest.current?.abort(),[]);
+  useEffect(()=>()=>{
+    pushRequest.current?.abort();
+    clearTimeout(completionTimer.current);
+  },[]);
 
   async function pushNow() {
     if (!pushScope || !itemId || !location || !connected || !batchIds.length || pushRequest.current) return;
@@ -260,16 +272,36 @@ function InventoryEventList({store,filter,openProduct,productImageUrl,pushScope}
     pushRequest.current = request;
     setPushing(true);
     setPushResult(undefined);
+    setActiveBatchIds(new Set(batchIds));
+    let allSynced = false;
     try {
-      const result = await pushInventoryBatches(location,itemId,batchIds,inScope,request.signal);
-      if (!request.signal.aborted && inScope()) setPushResult(result);
+      const result = await pushInventoryBatches(location,itemId,batchIds,inScope,request.signal,progress=>{
+        if (!request.signal.aborted && inScope()) {
+          setBatchProgress(previous=>new Map(previous).set(progress.messageId,progress));
+        }
+      });
+      if (request.signal.aborted || !inScope()) return;
+      setPushResult(result);
+      allSynced = !result.error && result.sent===batchIds.length;
+      if (allSynced) {
+        setDimmingSynced(true);
+        completionTimer.current = setTimeout(()=>{
+          setActiveBatchIds(new Set());
+          setDimmingSynced(false);
+          store.refreshLocation();
+        },800);
+      }
     } catch (cause) {
       if (!request.signal.aborted && inScope()) setPushResult({sent:0,error:errorText(cause,'HotWax could not check the queue.')});
     } finally {
       pushRequest.current = undefined;
       if (!request.signal.aborted && inScope()) {
         setPushing(false);
-        store.refreshLocation();
+        if (!allSynced) {
+          setActiveBatchIds(new Set());
+          setBatchProgress(previous=>new Map([...previous].filter(([,progress])=>progress.state==='Synced')));
+          store.refreshLocation();
+        }
       }
     }
   }
@@ -313,17 +345,15 @@ function InventoryEventList({store,filter,openProduct,productImageUrl,pushScope}
         setShowSynced(Boolean(event.currentTarget.checked));setVisibleCount(EVENT_ROWS_PER_PAGE);
       }}/>
       {pushScope && <s-button variant="secondary" loading={pushing}
-        disabled={!connected || loading || Boolean(error) || !batchIds.length || pushing} onClick={pushNow}>Push now</s-button>}
+        disabled={!connected || loading || Boolean(error) || !batchIds.length || pushing || dimmingSynced} onClick={pushNow}>Push now</s-button>}
     </s-stack>
-    {pushScope && connected && !loading && !error && !batchIds.length &&
+    {pushScope && connected && !loading && !error && !batchIds.length && !pushResult && !pushing &&
       <s-text type="small" color="subdued">No batches ready to push for this product.</s-text>}
-    {pushResult && <s-banner tone={pushResult.error?'warning':pushResult.sent?'success':'info'}>
-      {pushResult.sent ? (pushResult.sent===1?'1 batch synced.':pushResult.sent+' batches synced.')+' ' : ''}
-      {pushResult.error || (!pushResult.sent ? 'No queued batches remained.' : '')}
-    </s-banner>}
+    {pushResult && <s-banner tone={pushResult.error?'warning':'success'}
+      heading={pushResult.error || (hasUnsentEvents?'Queued events synced to Shopify':'All events synced to Shopify')}/>}
     {error && <s-banner tone="warning" heading="Inventory ledger unavailable">{error}</s-banner>}
     {loading && <Loading label="Loading inventory events…"/>}
-    {!loading && connected && !error && !visibleEvents.length &&
+    {!loading && connected && !error && !visibleEvents.length && !pushResult &&
       <s-text color="subdued">{showSynced?'No recent inventory changes.':'No unsent changes in recent inventory events.'}</s-text>}
     {visibleEvents.slice(0,visibleCount).map(event=>{
       const source = sources.get(eventSourceKey(event));
@@ -334,6 +364,7 @@ function InventoryEventList({store,filter,openProduct,productImageUrl,pushScope}
         subtitle={filter ? source?.actor : labelFor(product)}
         detail={filter ? undefined : [record,source?.actor].filter(Boolean).join(' · ')}
         timing={eventTiming(event,now)} imageUrl={productImageUrl ?? product.imageUrl} value={signed(event.delta)} state={event.state}
+        dimmed={dimmingSynced && activeBatchIds.has(event.messageId)}
         onClick={openProduct ? ()=>openProduct(product,'events') : undefined}/>;
     })}
     {visibleCount < visibleEvents.length && <s-stack direction="inline">
@@ -738,9 +769,9 @@ function Quantity({label,value,projected,projecting}: {
   </s-stack>;
 }
 
-function Row({title,subtitle,detail,timing,imageUrl,state,value,valueLabel,onClick}: {
+function Row({title,subtitle,detail,timing,imageUrl,state,value,valueLabel,onClick,dimmed}: {
   title: string; subtitle?: string; detail?: string; timing?: string; imageUrl?: string;
-  state?: string; value?: string; valueLabel?: string; onClick?: () => void;
+  state?: string; value?: string; valueLabel?: string; onClick?: () => void; dimmed?: boolean;
 }) {
   const content = <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base" paddingBlock="base" paddingInline="small">
     <s-stack direction="inline" alignItems="center" gap="base">
@@ -748,7 +779,7 @@ function Row({title,subtitle,detail,timing,imageUrl,state,value,valueLabel,onCli
         <s-image src={imageUrl} objectFit="contain"/>
       </s-box>}
       <s-stack direction="block" gap="small-300">
-        <s-text type="strong">{title}</s-text>
+        <s-text type="strong" color={dimmed?'subdued':undefined}>{title}</s-text>
         {subtitle && <s-text type="small" color="subdued">{subtitle}</s-text>}
         {detail && <s-text type="small" color="subdued">{detail}</s-text>}
         {timing && <s-text type="small" color="subdued">{timing}</s-text>}
@@ -759,7 +790,7 @@ function Row({title,subtitle,detail,timing,imageUrl,state,value,valueLabel,onCli
       {value && <s-box minInlineSize={valueLabel?'64px':'48px'}>
         <s-stack direction="block" alignItems="end" gap="small-300">
           {valueLabel && <s-text type="small" color="subdued">{valueLabel}</s-text>}
-          <s-text type="strong">{value}</s-text>
+          <s-text type="strong" color={dimmed?'subdued':undefined}>{value}</s-text>
         </s-stack>
       </s-box>}
       {onClick && <s-icon type="chevron-right" color="subdued"/>}

@@ -148,6 +148,8 @@ export function queuedInventoryBatches(events: InventoryEvent[]) {
   return [...new Set(batches.map(event=>event.messageId))];
 }
 
+export type BatchProgress = {messageId: string; state: 'Sending' | 'Synced'; syncedAt?: number};
+
 function batchMatchesItem(message: OmsRow, itemId: string, locationId: string) {
   if (message.isOutgoing!=='Y' || message.systemMessageTypeId!==LOCATION_MESSAGE) return false;
   try {
@@ -164,10 +166,21 @@ function batchMatchesItem(message: OmsRow, itemId: string, locationId: string) {
 
 export async function pushInventoryBatches(
   location: Location, itemId: string, reviewedIds: string[], inScope: () => boolean, signal: AbortSignal,
+  onProgress: (progress: BatchProgress) => void,
 ) {
   const events = await recentInventoryEvents(location,signal,itemId);
   const messageIds = queuedInventoryBatches(events).filter(id=>reviewedIds.includes(id));
-  let sent = 0;
+  const confirmed = new Set<string>();
+  function confirm(messageId: string, syncedAt?: number) {
+    if (confirmed.has(messageId)) return;
+    confirmed.add(messageId);
+    onProgress({messageId,state:'Synced',syncedAt});
+  }
+  for (const event of events) {
+    if (event.state==='Synced' && event.messageType===LOCATION_MESSAGE && reviewedIds.includes(event.messageId)) {
+      confirm(event.messageId,event.syncedAt);
+    }
+  }
   let error = '';
   for (const id of messageIds) {
     if (signal.aborted || !inScope()) break;
@@ -179,12 +192,16 @@ export async function pushInventoryBatches(
         error = 'The queued batch could not be matched to this product and store.';
         break;
       }
-      if (batch.statusId==='SmsgSent') continue;
+      if (batch.statusId==='SmsgSent') {
+        confirm(id,inventoryQuantity(batch.processedDate) ?? undefined);
+        continue;
+      }
       if (batch.statusId!=='SmsgProduced') {
         error = 'The batch changed state. Refresh its status before trying again.';
         break;
       }
       if (signal.aborted || !inScope()) break;
+      onProgress({messageId:id,state:'Sending'});
       let sendDenied = false;
       try {
         await oms.mutate(path+'/send',{systemMessageId:id});
@@ -199,7 +216,7 @@ export async function pushInventoryBatches(
           : 'Shopify delivery could not be confirmed. Refresh to check the batch.';
         break;
       }
-      sent++;
+      confirm(id,inventoryQuantity(result.processedDate) ?? undefined);
     } catch (cause) {
       error = cause instanceof OmsLookupError && cause.status===403
         ? 'Your HotWax account cannot access this batch.'
@@ -207,7 +224,8 @@ export async function pushInventoryBatches(
       break;
     }
   }
-  return {sent,error};
+  if (!error && confirmed.size!==reviewedIds.length) error = 'Some batches changed status. Refresh to check them.';
+  return {sent:confirmed.size,error};
 }
 
 export function inventoryEventSources(location: Location, events: InventoryEvent[], signal: AbortSignal) {
