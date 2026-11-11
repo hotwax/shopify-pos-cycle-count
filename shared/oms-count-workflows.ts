@@ -41,10 +41,14 @@ async function overview(id: string, ctx: Context, oms: OmsConnection) {
     canCreateSession: text(work.statusId) === 'CYCLE_CNT_IN_PRGS', canComplete: ctx.canSubmit, canPreview:canPreviewCount(work,ctx),
     canStart: text(work.statusId) === 'CYCLE_CNT_CREATED' && (Number(work.estimatedStartDate || 0) <= Date.now() || ctx.canPrestart)};
 }
-async function reviewRows(id: string, oms: OmsConnection) {
+export async function reviewRows(id: string, oms: OmsConnection, productId?: string) {
   const result: OmsRow[] = [];
-  for (let index = 0; true; index++) {
-    const found = rows(await oms.get(`${workPath(id)}/reviews?${new URLSearchParams({pageSize:'500',pageIndex:String(index),orderByField:'productId'})}`));
+  for (let index = 0; index <= 10000; index++) {
+    const params = new URLSearchParams({pageSize:'500',pageIndex:String(index),orderByField:'productId'});
+    if (productId) params.set('productId',productId);
+    const page = await oms.get<unknown>(`${workPath(id)}/reviews?${params}`);
+    const found = rows(page);
+    if (!Array.isArray(page) || found.length!==page.length) throw new OmsLookupError('HotWax returned incomplete count reviews.');
     result.push(...found);
     if (found.length < 500) return result;
   }
