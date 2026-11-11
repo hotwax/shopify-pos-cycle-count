@@ -11,7 +11,7 @@ type Location = {
 };
 
 export type Variant = {variantId?: string; itemId?: string; title: string; option?: string; sku?: string; barcode?: string};
-export type InventoryEvent = {id: string; itemId: string; source: string; reference: string; at: number; delta: number; state: string};
+export type InventoryEvent = {id: string; itemId: string; source: string; reference: string; at: number; delta: number; state: string; product?: Variant};
 export type InventoryLevel = {available: number | null; onHand: number | null; committed: number | null; checkedAt: number};
 type Ledger = {details: unknown; hasMore?: boolean};
 type Quantities = {name: string; quantity: number}[];
@@ -42,12 +42,36 @@ function connection(location: Location, signal?: AbortSignal) {
 
 export async function inventoryEvents(location: Location, mode: 'RECENT' | 'UNASSIGNED_NONZERO', page: number, signal: AbortSignal) {
   const query = new URLSearchParams({shopId:location.shopId,shopifyLocationId:location.locationId,mode,pageSize:'20',pageIndex:String(page)});
-  const data = await connection(location,signal).get<Ledger>(LEDGER+'?'+query);
+  const oms = connection(location,signal);
+  const data = await oms.get<Ledger>(LEDGER+'?'+query);
   if (!Array.isArray(data.details)) throw new OmsLookupError('HotWax returned an incomplete inventory ledger.');
   const events = rows(data.details)
     .filter(row=>text(row.shopId)===location.shopId && text(row.shopifyLocationId)===location.locationId)
     .map(readEvent);
-  return {events,hasMore:data.hasMore===true};
+  const products = await ledgerProducts(oms,location.shopId,events).catch(()=>new Map<string,Variant>());
+  return {events:events.map(event=>({...event,product:products.get(event.itemId)})),hasMore:data.hasMore===true};
+}
+
+async function ledgerProducts(oms: OmsConnection, shopId: string, events: InventoryEvent[]) {
+  const ids = [...new Set(events.map(event=>event.itemId).filter(id=>/^\d+$/.test(id)))];
+  const products = new Map<string,Variant>();
+  if (!ids.length) return products;
+
+  const result = await oms.postRead('/rest/s1/shopify/graphql',{
+    shopId,
+    queryText:'query InventoryItems($ids: [ID!]!) { nodes(ids: $ids) { ... on InventoryItem { id variant { '+VARIANT_FIELDS+' } } } }',
+    variables:{ids:ids.map(id=>'gid://shopify/InventoryItem/'+id)},
+  });
+  const nodes = (result.response as {nodes?: (ItemNode | null)[]} | undefined)?.nodes ?? [];
+  for (const node of nodes) {
+    if (!node?.variant) continue;
+    const itemId = node.id.split('/').at(-1)!;
+    products.set(itemId,{
+      itemId,variantId:node.variant.id.split('/').at(-1),title:node.variant.product.title,
+      option:node.variant.title==='Default Title' ? undefined : node.variant.title,sku:node.variant.sku,
+    });
+  }
+  return products;
 }
 
 function readEvent(row: OmsRow): InventoryEvent {

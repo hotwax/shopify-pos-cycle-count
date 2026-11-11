@@ -193,6 +193,7 @@ function Workspace({scope}: {scope: InventoryScope}) {
   }
 
   return <s-page heading="Store inventory" subheading={location?.name}>
+    {!selected && <s-button slot="secondary-actions" variant="secondary" onClick={()=>shopify.scanner.showCameraScanner()}>Scan</s-button>}
     <s-scroll-box key={selected?'detail':'inventory'}>
       <s-box padding="large">
         <s-stack direction="block" gap="large">
@@ -237,14 +238,9 @@ function Workspace({scope}: {scope: InventoryScope}) {
               </s-stack>
             </s-section>
           </> : <>
-            <s-stack direction="inline" alignItems="center" gap="base">
-              <s-box inlineSize="100%">
-                <s-search-field placeholder="Search by name, SKU or barcode" value={input} onInput={event=>{
-                  setScan('');setInput(event.currentTarget.value ?? '');
-                }}/>
-              </s-box>
-              <s-button variant="secondary" onClick={()=>shopify.scanner.showCameraScanner()}>Scan</s-button>
-            </s-stack>
+            <s-search-field placeholder="Search by name, SKU or barcode" value={input} onInput={event=>{
+              setScan('');setInput(event.currentTarget.value ?? '');
+            }}/>
             {!search && <s-stack direction="inline" gap="small">
               <s-button variant={tab==='queue'?'primary':'secondary'} onClick={()=>setTab('queue')}>Inventory queue</s-button>
               <s-button variant={tab==='recent'?'primary':'secondary'} onClick={()=>setTab('recent')}>Recent activity</s-button>
@@ -262,9 +258,10 @@ function Workspace({scope}: {scope: InventoryScope}) {
                     <s-text color="subdued">{search?'No matching products.':tab==='queue'?'No updates are waiting to be published.':'No recent events at this location.'}</s-text>
                   </s-stack>}
                 {search ? products.map(product=><Row key={product.variantId} title={product.title} subtitle={labelFor(product)}
-                  onClick={()=>select(product)}/>) : events.map(event=><Row key={event.id} title={event.source}
-                  subtitle={[event.reference,timeAt(event.at,location?.timeZone)].filter(Boolean).join(' · ')}
-                  value={signed(event.delta)} state={event.state} onClick={()=>select({itemId:event.itemId,title:'Inventory item '+event.itemId})}/>)}
+                  onClick={()=>select(product)}/>) : events.map(event=><Row key={event.id} title={event.product?.title ?? event.source}
+                  subtitle={[event.product && labelFor(event.product),event.reference,timeAt(event.at,location?.timeZone)].filter(Boolean).join(' · ')}
+                  value={signed(event.delta)} state={event.state}
+                  onClick={()=>select(event.product ?? {itemId:event.itemId,title:'Inventory item '+event.itemId})}/>)}
                 {(search ? cursor : moreEvents) && <s-stack direction="inline">
                   <s-button variant="secondary" disabled={loading || (!search && !connected)} onClick={loadMore}>Load more</s-button>
                 </s-stack>}
