@@ -13,7 +13,7 @@ type Location = {
 export type Variant = {variantId?: string; itemId?: string; title: string; option?: string; sku?: string; barcode?: string; imageUrl?: string};
 export type InventoryEvent = {id: string; itemId: string; source: string; reference: string; at: number; delta: number; state: string; product?: Variant};
 export type InventoryLevel = {available: number | null; onHand: number | null; committed: number | null; checkedAt: number};
-type Ledger = {details: unknown; hasMore?: boolean};
+type Ledger = {details: unknown};
 type Quantities = {name: string; quantity: number}[];
 type ItemNode = {id: string; inventoryLevel?: {quantities: Quantities}; variant?: VariantNode};
 type MediaPreview = {preview?: {image?: {url: string} | null} | null};
@@ -27,7 +27,12 @@ type VariantNode = {
 const LEDGER = '/rest/s1/sob/shopify/locationInventoryAdjustmentDetails';
 const LEVELS = 'inventoryLevel(locationId: $location) { quantities(names: ["available", "on_hand", "committed"]) { name quantity } }';
 const VARIANT_FIELDS = 'id title sku product { title }';
-const SEARCH_IMAGE = 'preview { image { url(transform: {maxWidth: 144, maxHeight: 144}) } }';
+const IMAGE_PREVIEW = 'preview { image { url(transform: {maxWidth: 144, maxHeight: 144}) } }';
+const CATALOG_VARIANT_FIELDS = `
+  id title sku
+  media(first: 1) { nodes { ${IMAGE_PREVIEW} } }
+  product { title featuredMedia { ${IMAGE_PREVIEW} } }
+`;
 
 export async function inventoryLocation(scope: InventoryScope, getSessionToken: () => Promise<string | undefined>, signal: AbortSignal): Promise<Location> {
   const token = await getSessionToken();
@@ -45,38 +50,52 @@ function connection(location: Location, signal?: AbortSignal) {
   return new OmsConnection({shopifySessionToken:'',shopifyLocationId:location.locationId,omsToken:location.token,signal});
 }
 
-export async function inventoryEvents(location: Location, mode: 'RECENT' | 'UNASSIGNED_NONZERO', page: number, signal: AbortSignal) {
-  const query = new URLSearchParams({shopId:location.shopId,shopifyLocationId:location.locationId,mode,pageSize:'20',pageIndex:String(page)});
+export async function unsentInventoryEvents(location: Location, signal: AbortSignal) {
+  const query = new URLSearchParams({
+    shopId:location.shopId,shopifyLocationId:location.locationId,mode:'RECENT',pageSize:'500',pageIndex:'0',
+  });
   const oms = connection(location,signal);
   const data = await oms.get<Ledger>(LEDGER+'?'+query);
   if (!Array.isArray(data.details)) throw new OmsLookupError('HotWax returned an incomplete inventory ledger.');
   const events = rows(data.details)
-    .filter(row=>text(row.shopId)===location.shopId && text(row.shopifyLocationId)===location.locationId)
+    .filter(row=>text(row.shopId)===location.shopId && text(row.shopifyLocationId)===location.locationId &&
+      row.systemMessageStatusId!=='SmsgSent')
     .map(readEvent);
-  const products = await ledgerProducts(oms,location.shopId,events).catch(()=>new Map<string,Variant>());
-  return {events:events.map(event=>({...event,product:products.get(event.itemId)})),hasMore:data.hasMore===true};
+  const products = await ledgerProducts(oms,location.shopId,events);
+  return events.map(event=>({...event,product:products.get(event.itemId)}));
 }
 
 async function ledgerProducts(oms: OmsConnection, shopId: string, events: InventoryEvent[]) {
   const ids = [...new Set(events.map(event=>event.itemId).filter(id=>/^\d+$/.test(id)))];
   const products = new Map<string,Variant>();
-  if (!ids.length) return products;
-
-  const result = await oms.postRead('/rest/s1/shopify/graphql',{
-    shopId,
-    queryText:'query InventoryItems($ids: [ID!]!) { nodes(ids: $ids) { ... on InventoryItem { id variant { '+VARIANT_FIELDS+' } } } }',
-    variables:{ids:ids.map(id=>'gid://shopify/InventoryItem/'+id)},
-  });
-  const nodes = (result.response as {nodes?: (ItemNode | null)[]} | undefined)?.nodes ?? [];
-  for (const node of nodes) {
-    if (!node?.variant) continue;
-    const itemId = node.id.split('/').at(-1)!;
-    products.set(itemId,{
-      itemId,variantId:node.variant.id.split('/').at(-1),title:node.variant.product.title,
-      option:node.variant.title==='Default Title' ? undefined : node.variant.title,sku:node.variant.sku,
-    });
+  const requests = [];
+  for (let start=0; start<ids.length; start+=50) {
+    requests.push(oms.postRead('/rest/s1/shopify/graphql',{
+      shopId,
+      queryText:`query InventoryItems($ids: [ID!]!) {
+        nodes(ids: $ids) { ... on InventoryItem { id variant { ${CATALOG_VARIANT_FIELDS} } } }
+      }`,
+      variables:{ids:ids.slice(start,start+50).map(id=>'gid://shopify/InventoryItem/'+id)},
+    }));
+  }
+  for (const result of await Promise.allSettled(requests)) {
+    if (result.status!=='fulfilled') continue;
+    const nodes = (result.value.response as {nodes?: (ItemNode | null)[]} | undefined)?.nodes ?? [];
+    for (const node of nodes) {
+      if (!node?.variant) continue;
+      const itemId = node.id.split('/').at(-1)!;
+      products.set(itemId,catalogVariant(node.variant,itemId));
+    }
   }
   return products;
+}
+
+function catalogVariant(node: VariantNode, itemId?: string): Variant {
+  return {
+    itemId,variantId:node.id.split('/').at(-1),title:node.product.title,
+    option:node.title==='Default Title' ? undefined : node.title,sku:node.sku,barcode:node.barcode,
+    imageUrl:node.media?.nodes[0]?.preview?.image?.url ?? node.product.featuredMedia?.preview?.image?.url,
+  };
 }
 
 function readEvent(row: OmsRow): InventoryEvent {
@@ -85,7 +104,7 @@ function readEvent(row: OmsRow): InventoryEvent {
   const delta = Number(row.computedInventoryChange ?? 0);
   const states: Record<string,string> = {
     SmsgProduced:'Ready to send',SmsgSending:'Sending',SmsgError:'Needs attention',
-    SmsgSent:'Sent',SmsgCancelled:'Cancelled',
+    SmsgCancelled:'Cancelled',
   };
   const message = text(row.systemMessageId);
   const status = text(row.systemMessageStatusId);
@@ -104,11 +123,7 @@ export async function searchInventory(location: Location, query: string, barcode
     shopId:location.shopId,
     queryText:`query StoreInventorySearch($after: String, $filter: String!) {
       productVariants(first: 20, after: $after, query: $filter) {
-        nodes {
-          id title sku barcode inventoryItem { id }
-          media(first: 1) { nodes { ${SEARCH_IMAGE} } }
-          product { title featuredMedia { ${SEARCH_IMAGE} } }
-        }
+        nodes { ${CATALOG_VARIANT_FIELDS} barcode inventoryItem { id } }
         pageInfo { endCursor hasNextPage }
       }
     }`,
@@ -118,11 +133,8 @@ export async function searchInventory(location: Location, query: string, barcode
     nodes: VariantNode[]; pageInfo: {endCursor?: string; hasNextPage: boolean};
   }} | undefined)?.productVariants;
   if (!page || !Array.isArray(page.nodes)) throw new OmsLookupError('Shopify returned incomplete product results.');
-  const items = page.nodes.filter(node=>!barcode || node.barcode===barcode).map(node=>({
-    title:node.product.title,option:node.title==='Default Title'?undefined:node.title,sku:node.sku,barcode:node.barcode,
-    variantId:node.id.split('/').at(-1),itemId:node.inventoryItem?.id.split('/').at(-1),
-    imageUrl:node.media?.nodes[0]?.preview?.image?.url ?? node.product.featuredMedia?.preview?.image?.url,
-  }));
+  const items = page.nodes.filter(node=>!barcode || node.barcode===barcode)
+    .map(node=>catalogVariant(node,node.inventoryItem?.id.split('/').at(-1)));
   return {items,cursor:page.pageInfo.hasNextPage?page.pageInfo.endCursor:undefined};
 }
 
