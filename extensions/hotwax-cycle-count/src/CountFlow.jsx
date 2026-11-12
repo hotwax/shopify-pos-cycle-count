@@ -280,15 +280,10 @@ export function CountFlow({workEffortId,screen='summary',product:initialProduct,
         <s-button slot="primary-action" onClick={()=>openScreen(pendingDecision.action==='confirmZero'?'zero':'extras')}>Continue</s-button>
       </s-banner>}
       <s-stack direction="block" gap="base">
-        {/* Disabled until the count can be sent, with what is still missing underneath. If the
-            check cannot load, the button stays usable and the sheet checks again on tap. */}
-        {canManage&&<s-stack direction="block" gap="small">
-          <s-button variant="primary" disabled={busy||(!totals&&!totalsError)||!!totals&&!totals.ready} command="--show" commandFor="count-submit" onClick={()=>void prepareSubmission()}>{!totals&&!totalsError?'Checking…':'Submit for approval'}</s-button>
-          {totals&&!totals.ready&&<s-stack direction="block" gap="none">
-            <s-text color="subdued">Before submitting:</s-text>
-            {totals.missing.map(step=><s-text key={step}>• {step}</s-text>)}
-          </s-stack>}
-        </s-stack>}
+        {/* Disabled until the count can be sent; the Progress and Open sessions sections below
+            show what is left. If the check cannot load, the button stays usable and the sheet
+            checks again on tap. */}
+        {canManage&&<s-button variant="primary" disabled={busy||(!totals&&!totalsError)||!!totals&&!totals.ready} command="--show" commandFor="count-submit" onClick={()=>void prepareSubmission()}>{!totals&&!totalsError?'Checking…':'Submit for approval'}</s-button>}
         {info.canStart&&<s-button variant="primary" disabled={busy} onClick={()=>run(startCounting)}>Start count</s-button>}
       </s-stack>
       {info.statusId==='CYCLE_CNT_CMPLTD'&&<s-banner tone="success" heading="Sent to HotWax for approval"/>}
