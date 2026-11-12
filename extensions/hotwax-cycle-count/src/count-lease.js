@@ -79,7 +79,13 @@ export class CountLease {
     // (manageLease). OMS must still enforce ownership for other clients.
     const generation=this.generation;
     try {return await this.request(action,{...payload,lease:this.value});}
-    catch(error) {if(generation===this.generation&&error?.leaseLost)await this.lost(error);throw error;}
+    catch(error) {
+      // A refused write first renews: OMS re-issues this terminal's own expired lease when
+      // no other register has locked the session since. A genuine loss fails the renew,
+      // which fences every copy as before. The write itself is retried by the next sync.
+      if(generation===this.generation&&error?.leaseLost)await this.renew().catch(()=>{});
+      throw error;
+    }
   }
   async release() {
     this.confirmed=false;++this.generation;

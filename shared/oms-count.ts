@@ -276,7 +276,8 @@ export async function handleCount(
       await oms.mutate(`${resource(sessionId)}/release`,{fromDate:lock.fromDate,thruDate:Date.now(),overrideByUserId:ctx.username},'PUT');
       return {released:true};
     }
-    return manageLease(action,sessionId,ctx.username,leaseDevice(identity.deviceId),payload.lease as OmsRow|undefined,oms);
+    // The client keeps the lease a renew returns, so only that call may re-acquire an expired lease of its own.
+    return manageLease(action,sessionId,ctx.username,leaseDevice(identity.deviceId),payload.lease as OmsRow|undefined,oms,action==='leaseRenew');
   }
   if (action === 'contextProduct') {
     // HotWax stores the Shopify VARIANT id in ShopifyShopProduct.shopifyProductId.
