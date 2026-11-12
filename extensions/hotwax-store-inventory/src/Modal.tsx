@@ -95,7 +95,7 @@ function Extension({screen,state}: {screen?: string; state: unknown}) {
   const scope = owner ? JSON.parse(owner) as InventoryScope : null;
   if (!scope || scope.staffId!==scope.userId) return <s-page heading="Store inventory"><s-box padding="large">
     <s-banner tone="warning" heading="Shopify POS sign-in required">
-      Open the Gorjana sandbox with your own Shopify account and pin in to continue.
+      Sign in to Shopify POS with your own account and pin in to continue.
     </s-banner>
   </s-box></s-page>;
 

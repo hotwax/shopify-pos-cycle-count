@@ -111,6 +111,11 @@ The initial implementation has been deployed to a demo store and opened on a phy
 `gorjana-sandbox.myshopify.com`; use `https://gorjana-maarg-uat.hotwax.io` in App Home.
 The default `shopify.app.toml` still identifies the original HotWax app.
 
+The **Store inventory** tile (`extensions/hotwax-store-inventory`) reads the same App Home OMS
+address as Cycle count, so it works in any shop where this app is set up. It relies on the
+OMS's Shopify inventory ledger (`/rest/s1/sob/shopify/locationInventoryAdjustmentDetails`); confirm
+that service exists on the target OMS before releasing the tile to another shop.
+
 Use the named scripts so both build and deployment select the same sandbox configuration:
 
 ```sh

@@ -1,6 +1,3 @@
-export const INVENTORY_SANDBOX = 'gorjana-sandbox.myshopify.com';
-export const INVENTORY_OMS = 'https://gorjana-maarg-uat.hotwax.io';
-
 type RegisterIdentity = {shopDomain: string; shopId: unknown; locationId: unknown; userId: unknown; staffId: unknown};
 export type InventoryScope = {shopDomain: string; shopId: string; locationId: string; userId: string; staffId: string};
 
@@ -10,9 +7,11 @@ function registerId(value: unknown, label: string): string {
   return id;
 }
 
+/** The shop, location and signed-in staff member a Store inventory screen acts for. Any shop
+ * with this app works; its OMS address comes from the shop's HotWax setup (App Home). */
 export function inventoryScope(identity: RegisterIdentity): InventoryScope {
-  if (identity.shopDomain !== INVENTORY_SANDBOX) {
-    throw new Error('Store inventory is enabled in the Gorjana sandbox.');
+  if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(String(identity.shopDomain))) {
+    throw new Error('Shopify could not identify this shop. Reopen Store inventory.');
   }
   return {
     shopDomain: identity.shopDomain,

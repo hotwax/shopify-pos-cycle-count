@@ -5,9 +5,10 @@ import {inventoryScope, sameInventoryScope, availableTarget, commitInventoryRevi
 const register = {shopDomain: 'gorjana-sandbox.myshopify.com', shopId: 7, locationId: 9, userId: 11, staffId: 13};
 const scope = inventoryScope(register);
 
-test('inventory scope requires the Gorjana sandbox and a pinned staff identity', () => {
+test('inventory scope works for any Shopify shop and requires a pinned staff identity', () => {
   assert.equal(scope.staffId, '13');
-  assert.throws(() => inventoryScope({...register, shopDomain: 'gorjana.myshopify.com'}), /sandbox/);
+  assert.equal(inventoryScope({...register, shopDomain: 'gorjana.myshopify.com'}).shopDomain, 'gorjana.myshopify.com');
+  assert.throws(() => inventoryScope({...register, shopDomain: 'gorjana.example.com'}), /identify this shop/);
   assert.throws(() => inventoryScope({...register, staffId: undefined}), /staff/);
   assert.equal(sameInventoryScope(scope, inventoryScope({...register, staffId: 14})), false);
   assert.equal(sameInventoryScope(scope, inventoryScope({...register, locationId: 10})), false);

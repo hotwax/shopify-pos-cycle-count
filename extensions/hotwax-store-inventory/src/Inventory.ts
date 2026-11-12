@@ -1,6 +1,8 @@
 import {configureDirectOms, OmsConnection, OmsLookupError, rows, text, type OmsRow} from '../../../shared/oms-connection';
 import {shopFacility} from '../../../shared/oms-shop';
-import {INVENTORY_OMS, type InventoryScope} from '../../../shared/store-inventory';
+import {type InventoryScope} from '../../../shared/store-inventory';
+import {getShopOmsUrl} from '../../../shared/oms-shop-config';
+import {LOCAL_OMS_PREVIEW} from '../../../shared/oms-build-config';
 import {BASE, validId} from '../../../shared/oms-count';
 import {productSearchDetails} from '../../../shared/oms-count-products';
 import {reviewRows} from '../../../shared/oms-count-workflows';
@@ -76,7 +78,8 @@ const RESERVATION_FIELDS = 'edges { node { quantity } } pageInfo { hasNextPage e
 export async function inventoryLocation(scope: InventoryScope, getSessionToken: () => Promise<string | undefined>, signal: AbortSignal): Promise<Location> {
   const token = await getSessionToken();
   if (!token || signal.aborted) throw new OmsLookupError('Your Shopify session is unavailable. Reopen Store inventory.', 401);
-  configureDirectOms(INVENTORY_OMS);
+  // The shop's OMS address from its HotWax setup (App Home), the same setting Cycle count uses.
+  configureDirectOms(await getShopOmsUrl(signal, LOCAL_OMS_PREVIEW), LOCAL_OMS_PREVIEW);
   const oms = new OmsConnection({shopifySessionToken:token,shopifyLocationId:scope.locationId,signal});
   const {shop,facilityId} = await shopFacility(oms, 'https://'+scope.shopDomain, scope.locationId);
   if (!facilityId) throw new OmsLookupError('This Shopify location has no HotWax facility.');
