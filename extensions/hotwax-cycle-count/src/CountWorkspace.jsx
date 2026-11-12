@@ -8,17 +8,17 @@ import {IdentityMap} from './count-identity';
 import {bindCountRequest,currentCountOwner,currentAuditContext,countStatus,countTypeName,workStatus,subscribeScans,omsScope,createMemberSearch,AREAS} from './count-api';
 import {CountFlow} from './CountFlow.jsx';
 import {CreateCount} from './CreateCount.jsx';
-import {HandCount} from './HandCount.jsx';
 import {CatalogPicker} from './CatalogPicker.jsx';
 import {ProductList,CompactPager} from './ProductList.jsx';
-import {ActionRow,QuantityEditor,BackButton,DividedRows,amount} from './FlowParts.jsx';
+import {ActionRow,DividedRows,amount} from './FlowParts.jsx';
+import {ProductRow} from './ProductRow.jsx';
 import {HidBarcodeEntry} from './CountInputs.jsx';
 import {ScanEventRow} from './ScanEventRow.jsx';
 import {ScanFeedback} from './ScanFeedback.jsx';
 import {pruneLocalSessions,removeLocalSession,localCopyRemovable} from './count-cleanup';
 import {recoverSubmission,sessionSubmitted} from './count-submission';
 import {CountListIndex} from './count-list';
-import {COUNT_SESSION,COUNT_SUMMARY} from './count-navigation';
+import {COUNT_SESSION,COUNT_SUMMARY,COUNT_SAVED,COUNT_CREATE} from './count-navigation';
 import {CountQuantityEdits} from './count-quantity-edits';
 import {abortable,assertNotAborted,REQUEST_TIMEOUT} from '../../../shared/abortable';
 
@@ -26,17 +26,16 @@ const message=f=>f instanceof Error?f.message:'Could not complete this action. Y
 const editable=status=>['SESSION_CREATED','SESSION_ASSIGNED'].includes(status);
 // Same view names as the count summary's product list, plus this session's scans.
 const sessionTabs=[['all','All'],['uncounted','Uncounted'],['counted','Counted'],['scans','Scans']];
-// The native stack owns count summaries and sessions. These back targets
-// keep in-session tools with the active count engine.
+const dynamicTabs=[['all','Products'],['scans','Scans']];
+// Every page is its own screen on the POS navigation stack (native Back), or a POS sheet.
+// Only the session screen's own states (opening, counting, a camera confirmation) change in place.
 const ROUTES={
-  scanHistory:{title:'Scan history',back:'session'},opening:{title:'Opening session'},home:{title:'Cycle count'},new:{title:'Create count'},hand:{title:'Hand count'},
-  match:{title:'Match product',back:'issue'},editSession:{title:'Edit session',back:'options'},discard:{title:'Discard session',back:'options'},
-  forceRelease:{title:'Take over session',back:'options'},camera:{title:'Camera counting',back:'options'},cameraConfirm:{title:'Confirm quantity'},
-  work:{title:'Count summary'},count:{back:'summary'},readonly:{back:'summary'},submitted:{title:'Session submitted',back:'summary'},
-  context:{title:'Count this product',back:'summary'},product:{title:'Count quantity',back:'session'},issue:{title:'Check this scan',back:'unmatched'},
-  compare:{title:'Resolve quantity'},options:{},saved:{title:'Saved sessions',back:'options'},remove:{title:'Remove local copy',back:'options'},
+  opening:{title:'Opening session'},home:{title:'Cycle count'},new:{title:'Create count'},saved:{title:'Saved sessions'},
+  editSession:{title:'Edit session'},discard:{title:'Discard session'},forceRelease:{title:'Take over session'},
+  troubleshoot:{title:'Troubleshooting'},issue:{title:'Check this scan'},cameraConfirm:{title:'Confirm quantity'},
+  context:{title:'Count this product'},submitted:{title:'Session submitted'},
 };
-const BACK_LABELS={summary:'Count summary',session:'Session details'};
+const toast=text=>{try{shopify.toast?.show?.(text);}catch{/* A missing toast is not an error. */}};
 const OPEN_CANCELLED=Symbol('open cancelled');
 
 export function CountWorkspace({owner,page,entryKey,setHeader}) {
@@ -65,6 +64,9 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
       identity:new IdentityMap(storage),search:createMemberSearch(shopify.productSearch)};
   }
   const {storage,request,control,identity}=services.current;
+  // reattachTarget: the session this screen let go of while a session task is open above it.
+  // popOnReturn: this screen's work is done, so it closes when the screen above it does.
+  const reattachTarget=useRef(null),popOnReturn=useRef(false),returning=useRef(false),[compared,setCompared]=useState(false);
   const engine=useRef(null),ownership=useRef(null),alive=useRef(true),running=useRef(false),gate=useRef(false),latest=useRef(null),context=useRef(null);
   // Journal access waits for the background uploader; showing counts does not.
   const foreground=useRef(null),pruning=useRef(Promise.resolve()),removal=useRef(Promise.resolve()),opened=useRef(false),cancelOpen=useRef(null),navigating=useRef(false);
@@ -91,7 +93,6 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
     return services.current.search(query,needed,state.itemList,(variantId,display)=>state.rememberVariant(variantId,display),wanted);
   },[]);
   const listMemory=useRef({search:'',view:'all',page:0});
-  const selectProduct=useCallback(item=>{setProductId(item.productId);go('product');},[]);
   const own=()=>alive.current&&currentCountOwner()===owner;
   const hasScanLock=()=>own()&&!!engine.current?.active&&!!engine.current.count?.editable&&!!ownership.current?.canScan(engine.current.count.sessionId,currentAuditContext().deviceId);
   const canCount=!!count?.editable&&hasScanLock();
@@ -104,17 +105,16 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
   const sessionRoute=count?.statusId==='SESSION_SUBMITTED'?'submitted':count?.editable?'count':'readonly';
   latest.current={route,count,stats,canCount,busy,connected,hidMode,group,pageIndex:history?.pageIndex||0};
   gate.current=canCount&&!busy&&route==='count';
-  const title=route==='count'?count?.name||'Count items':route==='readonly'?count?.name||'Session details':route==='options'?(count?'Session options':'Count options'):ROUTES[route]?.title||'Cycle count';
+  const title=route==='count'?count?.name||'Count items':route==='readonly'?count?.name||'Session details':ROUTES[route]?.title||'Cycle count';
   const sessionToolbar=route==='count'&&!!count?.editable;
   const emptySession=sessionToolbar&&count.items.length===0&&!stats?.pending;
   const completionDisabled=busy||!connected||!canCount||!count?.canSubmit||emptySession;
   useEffect(()=>{
-    if(['work','hand'].includes(route))return;
+    if(route==='work')return;
     // The toolbar stays in place when iPadOS dismisses the keyboard on a tap.
     const action=sessionToolbar
       ?{label:'Complete session',loading:completing,disabled:completionDisabled,onClick:completeSession}
-      :route==='new'?null:{label:route==='options'?'Done':'More',loading:busy,disabled:busy||route==='opening',
-        onClick:()=>go(route==='options'?(count?sessionRoute:'home'):'options')};
+      :null;
     setHeader({heading:title,subheading:history?.facilityName||'',action});
   },[route,title,history?.facilityName,busy,sessionRoute,sessionToolbar,completionDisabled,completing]);
   function go(next) {gate.current=false;shopify.scanner.hideCameraScanner();setError('');setMatchingFeedback(null);setRoute(next);}
@@ -134,6 +134,7 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
       await releaseForeground();
       if(!own()||navigation.currentEntry?.key!==entryKey)return false;
       const variantId=page.variantId||shopify.product?.variantId;
+      returning.current=true;
       await navigation.navigate(screen,{state:{owner,variantId,...state}});
       return true;
     } catch {
@@ -173,15 +174,14 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
     await previous?.tail.catch(()=>{});
     if(ownership.current)ownership.current.active=false;
   }
-  async function attach(result,claimed=undefined,signal=undefined) {
+  async function attach(result,claimed=undefined,signal=undefined,keepView=false) {
     const step=work=>abortable(work,signal);
     await step(()=>foreground.current);
     await step(settle);if(!own())return;
     quantityEdits.current=new CountQuantityEdits(writeQuantity);
     setStats(null);setLease(null);setLeaseProblem('');setShowLockDetails(false);setSyncError('');setConflicts([]);setLastSynced(null);
-    listMemory.current={search:'',view:'all',page:0};
-    setSessionTab('all');setScanSearch('');setScanPage(0);setScanFilter('all');
-    const selected=context.current;
+    if(!keepView){listMemory.current={search:'',view:'all',page:0};setSessionTab('all');setScanSearch('');setScanPage(0);setScanFilter('all');}
+    const tool=page.kind==='session'?page.tool:undefined,selected=tool?null:context.current;
     if(selected&&result.editable&&!result.items.some(item=>item.productId===selected.productId))
       result={...result,items:[...result.items,{...selected,quantity:null,isRequested:result.countType!=='DIRECTED_COUNT'}]};
     // The shared variant -> HotWax mapping belongs to this shop and OMS connection.
@@ -203,10 +203,12 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
     try {await step(()=>state.open(result));}catch(failure){state.active=false;claim.active=false;throw failure;}
     if(!own()){state.active=false;claim.active=false;return;}
     if(result.editable)state.aggregate().catch(failure=>{if(own())setSyncError(message(failure));});
-    setRoute(!result.editable?(result.statusId==='SESSION_SUBMITTED'?'submitted':'readonly'):selected?'context':'count');
+    if(tool==='editSession'){setEditName(result.name||'');setEditArea(result.area||'');}
+    if(tool==='issue')setIssueId(page.issueId);
+    setRoute(tool&&(result.editable||tool==='troubleshoot')?tool:!result.editable?(result.statusId==='SESSION_SUBMITTED'?'submitted':'readonly'):selected?'context':'count');
     if(selected)setProductId(selected.productId);
   }
-  async function loadSession(sessionId,name='') {
+  async function loadSession(sessionId,name='',keepView=false) {
     return run(async()=>{
       // Acknowledge the tap before OMS, lease or local-storage work starts.
       setOpening({sessionId,name:name||'Session'});
@@ -235,7 +237,7 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
         // Cleanup stops at its next session; only a removal already under way is awaited.
         opened.current=true;
         await step(()=>removal.current.catch(()=>{}));
-        await attach(result,result.editable?claimed:undefined,signal);
+        await attach(result,result.editable?claimed:undefined,signal,keepView);
       }finally{clearTimeout(timer);if(cancelOpen.current===cancel)cancelOpen.current=null;}
     });
   }
@@ -251,8 +253,40 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
       const id=engine.current?.count.workEffortId;
       await closeSession();
       if(!toWork||page.fromSummary)returnToParent();
-      else if(own()){setWorkId(id);go('work');}
+      else await openSummary(id);
     });
+  }
+  // From a session opened on the home screen: show the count summary as its own screen,
+  // and close this finished session screen when the summary closes.
+  async function openSummary(workEffortId) {
+    popOnReturn.current=true;
+    if(!await openPage(COUNT_SUMMARY,{workEffortId}))popOnReturn.current=false;
+  }
+  // A session task opens on its own screen, which loads this session itself. This screen
+  // lets go of the journal and lock first, and loads the session again when the task closes.
+  async function openTool(tool,extra={}) {
+    await run(async()=>{
+      const state=engine.current;if(!state)return;
+      await quantityEdits.current?.flush().catch(()=>{});
+      reattachTarget.current={sessionId:state.count.sessionId,name:state.count.name};
+      await closeSession();
+      setOpening(reattachTarget.current);go('opening');
+    });
+    const target=reattachTarget.current;
+    if(target&&!await openPage(COUNT_SESSION,{...target,fromSummary:page.fromSummary,tool,...extra}))await reattach();
+  }
+  async function reattach() {
+    const target=reattachTarget.current;
+    if(!target||engine.current||!own())return;
+    reattachTarget.current=null;
+    // Waits until the closed task screen has finished its journal writes.
+    foreground.current=enterForeground(shopify.storage,owner,{takeOverStale:true});foreground.current.catch(()=>{});
+    await loadSession(target.sessionId,target.name,true);
+  }
+  async function finishTool(message='') {
+    await closeSession();
+    if(message)toast(message);
+    returnToParent();
   }
   const enqueue=useCallback(async job=>{
     const state=engine.current;
@@ -266,21 +300,26 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
   },[]);
   const writeQuantity=useCallback(async(item,change)=>{
     const state=engine.current;
-    const id=await enqueue({productId:item.productId,code:item.productIdentifier||item.sku||item.productId,source:'correction',...change});
+    const id=await enqueue({productId:item.productId,code:item.productIdentifier||item.sku||item.productId,source:'correction',...(item.notInSession?{product:item}:{}),...change});
     if(!id)return null;
     try {await state.aggregate();return state.items.items[item.productId]?.quantity;}
     catch(failure){if(own())setError(message(failure));return null;}
   },[]);
-  const changeQuantity=useCallback((item,change)=>quantityEdits.current.commit(item,change),[]);
+  const changeQuantity=useCallback((item,change)=>quantityEdits.current.commit(item,
+    change.adjustment===1&&!engine.current?.items.items[item.productId]?{quantity:1}:change),[]);
+  // Catalog matches for the session search, so any product can be counted from its row.
+  // A directed count only takes the products it requested; others can still be scanned as extras.
+  const findMore=useCallback(async query=>{
+    const result=await request('catalog',{search:query,pageIndex:0,scope:false});
+    const directed=engine.current?.count?.countType==='DIRECTED_COUNT';
+    return result.items.map(product=>({...product,quantity:null,notInSession:true,
+      ...(directed?{unavailable:'Not requested in this count'}:{})}));
+  },[]);
   const editQuantity=useCallback((item,text)=>quantityEdits.current.setDraft(item,text),[]);
   function showRecordedScans() {
-    if(latest.current.count?.countType==='DYNAMIC_COUNT')return;
     setScanSearch('');setScanPage(0);setScanFilter('all');setSessionTab('scans');
   }
-  function showUnmatchedScans() {
-    setScanFilter('unmatched');setScanPage(0);setSessionTab('scans');
-    go(count?.countType==='DYNAMIC_COUNT'?'scanHistory':sessionRoute);
-  }
+  function showUnmatchedScans() {setScanFilter('unmatched');setScanPage(0);setSessionTab('scans');}
   async function sync() {
     const state=engine.current;
     if(!own()||!state?.active||state.syncing||!latest.current.count?.editable||!ownership.current?.value?.owned||running.current)return;
@@ -313,7 +352,7 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
       const remote=await request('detail',{sessionId:state.count.sessionId});
       if(!remote.editable){await attach(remote);return;}
       const differences=state.itemList.filter(item=>item.revision!==item.syncedRevision).map(item=>({...state.view(item),serverQuantity:remote.items.find(row=>row.productId===item.productId)?.quantity??null}));
-      setConflicts(differences);go('compare');
+      setConflicts(differences);setCompared(true);
     });
   }
   async function completeSession() {
@@ -337,7 +376,7 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
         context.current=null;setContextProduct(null);setLeaseProblem('');
         await closeSession();
         if(page.fromSummary)returnToParent();
-        else if(own()){setWorkId(workEffortId);go('work');}
+        else if(own())await openSummary(workEffortId);
       } finally {if(own())setCompleting(false);}
     });
   }
@@ -362,7 +401,7 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
     (async()=>{
       if(page.kind==='work')return;
       const variantId=page.variantId||shopify.product?.variantId;
-      if(variantId)try{const selected=await request('contextProduct',{variantId});if(own()){context.current=selected;setContextProduct(selected);}}catch(failure){if(own())setError(message(failure));}
+      if(variantId&&!page.tool)try{const selected=await request('contextProduct',{variantId});if(own()){context.current=selected;setContextProduct(selected);}}catch(failure){if(own())setError(message(failure));}
       if(!own())return;
       if(page.kind==='session'){await loadSession(page.sessionId,page.name);return;}
       await refresh();
@@ -374,17 +413,27 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
     const onEntryChange=event=>{
       if(!own())return;
       if(navigation.currentEntry?.key!==entryKey) {
-        gate.current=false;
+        returning.current=true;gate.current=false;
         cancelOpen.current?.();
         return;
       }
       if(event.from?.key===entryKey)return;
+      onReturn();
+    };
+    // POS sends navigatesuccess to the screen that reappears after Back; some builds do not
+    // send currententrychange to it. Both run onReturn, which is safe to run twice.
+    const onShown=()=>{if(own()&&navigation.currentEntry?.key===entryKey&&returning.current)onReturn();};
+    const onReturn=()=>{
+      returning.current=false;
+      if(popOnReturn.current){returnToParent();return;}
+      if(reattachTarget.current&&!engine.current){void reattach();return;}
       const current=latest.current;
       if(current.route==='work')setWorkRevision(value=>value+1);
       if(current.route==='home')void run(()=>refresh(current.pageIndex,current.group));
       if(current.route==='saved')void run(async()=>{const local=await control.read(true);if(own())setCatalog(local.catalogue);});
     };
     navigation.addEventListener('currententrychange',onEntryChange);
+    navigation.addEventListener('navigatesuccess',onShown);
     const unSources=shopify.scanner.sources.current.subscribe(setSources);
     const unConnection=shopify.connectivity.current.subscribe(value=>{
       if(!own())return;
@@ -431,6 +480,7 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
     return()=>{
       alive.current=false;gate.current=false;clearInterval(syncTimer);clearInterval(heartbeat);clearInterval(status);
       navigation.removeEventListener('currententrychange',onEntryChange);
+      navigation.removeEventListener('navigatesuccess',onShown);
       unSources();unConnection();unScans();shopify.scanner.hideCameraScanner();
       const state=engine.current;if(state)state.active=false;
       if(ownership.current)ownership.current.active=false;
@@ -441,8 +491,8 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
   },[]);
   const isSessionDetail=['count','submitted','readonly'].includes(route);
   const dynamic=count?.countType==='DYNAMIC_COUNT';
-  const scanHistory=route==='scanHistory'||isSessionDetail&&!dynamic&&sessionTab==='scans'
-    ?engine.current?.historyPage(scanSearch,scanPage,scanFilter):null;
+  const tabs=dynamic?dynamicTabs:sessionTabs;
+  const scanHistory=isSessionDetail&&sessionTab==='scans'?engine.current?.historyPage(scanSearch,scanPage,scanFilter):null;
   // Names and images are fetched again by Shopify variant for what is on screen only.
   const visibleVariants=[stats?.lastScan?.variantId,...(scanHistory?.items||[]).map(event=>event.variantId)].filter(id=>id!=null).join(',');
   useEffect(()=>{if(visibleVariants)engine.current?.hydrate(visibleVariants.split(',')).catch(()=>{});},[visibleVariants]);
@@ -452,7 +502,6 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
   const last=stats?.lastScan;
   const cameraAvailable=sources.includes('camera');
   const posScannerConnected=sources.includes('external')||sources.includes('embedded');
-  function handCount(){setHidMode(false);go('hand');}
   function scanWithCamera(){setHidMode(false);shopify.scanner.showCameraScanner();}
   const pending=(stats?.dirty||0)+(stats?.pending||0);
   // Directed counts measure progress against the requested list; dynamic counts
@@ -469,21 +518,18 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
   })();
   const saveText=syncError?'Save needs attention':saving?'Saving…':stats?.dirty?`${amount(stats.dirty,'product')} waiting to save`:stats?.pending?'Finding products…':'All changes saved';
   const syncText=!count?.editable?'Saved in HotWax':saving?'Syncing with HotWax…':stats?.pending?`${stats.pending} scans to check · other products can still be counted`:stats?.dirty?`${stats.dirty} products saved on this device · sync pending`:lastSynced?'All quantities synced with HotWax':'Scans are saved on this device, then synced automatically';
-  const backTarget=ROUTES[route]?.back;
-  function back() {
-    if(backTarget==='summary'){leave(true);return;}
-    if(backTarget==='unmatched'){showUnmatchedScans();return;}
-    if(backTarget==='session'){go(sessionRoute);return;}
-    go(backTarget||(count?sessionRoute:'home'));
-  }
-  if(route==='new')return <CreateCount request={request} storage={storage} owner={owner} timeZone={history?.timeZone} back={()=>go('home')} onCreated={async(result,startNow)=>{
+  const canTakeOver=count?.editable&&!lease?.owned&&lease?.fromDate&&(count.canRelease||lease.operator===count.currentOperator);
+  if(route==='new')return <CreateCount request={request} storage={storage} owner={owner} timeZone={history?.timeZone} back={returnToParent} onCreated={async(result,startNow)=>{
+    // The new count or session opens above this screen; this screen closes when that one does.
+    popOnReturn.current=true;
     const opened=startNow?await open(result.sessionId):await openPage(COUNT_SUMMARY,{workEffortId:result.workEffortId});
-    if(!own())return;
-    setRoute('home');
-    if(!opened)await refresh();
+    if(!opened){popOnReturn.current=false;returnToParent();}
   }}/>;
-  if(route==='work')return <CountFlow key={workId} workEffortId={workId} refreshVersion={workRevision} setHeader={setHeader} openSession={open} storage={storage} owner={owner} request={request} navigationError={error}/>;
-  if(count&&route==='hand')return <HandCount setHeader={setHeader} onBusyChange={setBusy} disabled={!canCount} request={request} engine={engine.current} storage={storage} owner={owner} count={count} done={saved=>{if(saved)setSessionTab('all');go(sessionRoute);}}/>;
+  // Each count view is its own screen on the POS navigation stack; native Back returns to the one below.
+  if(route==='work')return <CountFlow key={workId} workEffortId={workId} screen={page.kind==='work'&&workId===page.workEffortId?page.view||'summary':'summary'} product={page.product} contribution={page.contribution}
+    openScreen={(view,state={})=>openPage(COUNT_SUMMARY,{workEffortId:workId,view,...state})} closeScreen={returnToParent}
+    refreshVersion={workRevision} setHeader={setHeader} openSession={open} storage={storage} owner={owner} request={request} navigationError={error}/>;
+  const hideOptions={command:'--hide',commandFor:'session-options'};
   const scanHistoryList=<s-stack direction="block" gap="base">
             <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
               <s-stack direction="inline" gap="small">
@@ -495,30 +541,33 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
             {scanFilter==='unmatched'&&matchingFeedback&&!matchingFeedback.pending&&<s-banner tone={matchingFeedback.failed?'critical':matchingFeedback.remaining?'warning':'success'} heading={matchingFeedback.failed?'Matching could not finish':`${amount(matchingFeedback.matched,'scan')} matched · ${matchingFeedback.remaining} still unmatched`}>{matchingFeedback.reason||'Matched quantities are saved on this device and will sync automatically.'}</s-banner>}
             <s-text-field label="Find a scan event" value={scanSearch} onInput={e=>{setScanSearch(e.currentTarget.value);setScanPage(0);}}/>
             <s-text color="subdued">Scan history saved on this register</s-text>
-            <DividedRows>{scanHistory?.items.map(event=><ScanEventRow key={event.id} event={event} disabled={busy||!canCount} onMatch={event=>{setIssueId(event.id);go('issue');}} onUndo={event=>run(async()=>{if(event.aggApplied===0)await engine.current.discardUnmatched(event.id);else await engine.current.undoScan(event.id);})}/>)}</DividedRows>
+            <DividedRows>{scanHistory?.items.map(event=><ScanEventRow key={event.id} event={event} disabled={busy||!canCount} onMatch={event=>void openTool('issue',{issueId:event.id})} onUndo={event=>run(async()=>{if(event.aggApplied===0)await engine.current.discardUnmatched(event.id);else await engine.current.undoScan(event.id);})}/>)}</DividedRows>
             {!scanHistory?.total&&<s-text>No scan events match this view.</s-text>}
             {scanHistory&&<CompactPager {...scanHistory} label="events" disabled={busy} onPage={setScanPage}/>}
           </s-stack>;
   // filters shows the sort control; the session tabs above replace the list's own tabs.
-  const sessionProducts=view=><ProductList key={view} items={count.items} filters listIndex={services.current.listIndex} memory={listMemory.current} activeView={view} showTabs={false} countExtras onSelect={selectProduct}
-    onQuantity={count.editable?changeQuantity:undefined} onQuantityInput={editQuantity} disabled={busy||(count.editable&&!canCount)} search={searchMembers} onVisible={hydrateRows}/>;
+  // Rows are edited in place, so they do not open a separate quantity page.
+  const sessionProducts=view=><ProductList key={view} items={count.items} filters listIndex={services.current.listIndex} memory={listMemory.current} activeView={view} showTabs={false} countExtras
+    onQuantity={count.editable?changeQuantity:undefined} onQuantityInput={editQuantity} disabled={busy||(count.editable&&!canCount)} search={searchMembers} onVisible={hydrateRows} findMore={count.editable&&connected?findMore:undefined}/>;
   return <>
-    <s-scroll-box key={`${route}:${count?.sessionId||'home'}:${route==='product'?productId:''}`}><s-box padding="large"><s-stack direction="block" gap="large">
-      {!['home','options','hand','opening'].includes(route)&&!(page.kind==='session'&&isSessionDetail)&&<BackButton disabled={busy} onClick={back}>{BACK_LABELS[backTarget]||'Back'}</BackButton>}
+    <s-scroll-box key={`${route}:${count?.sessionId||'home'}`}><s-box padding="large"><s-stack direction="block" gap="large">
       {count&&count.name!==count.countName&&isSessionDetail&&<s-text color="subdued">{count.countName}</s-text>}
       {error&&<s-banner tone="critical" heading={error}/>}
-      {count?.editable&&!canCount&&<s-banner tone="critical" heading={lockedElsewhere?'Open on another register':'Counting paused'}>
+      {count?.editable&&!canCount&&route!=='forceRelease'&&<s-banner tone="critical" heading={lockedElsewhere?'Open on another register':'Counting paused'}>
         <s-button slot="primary-action" disabled={busy||!connected} onClick={reclaim}>Reconnect</s-button>
       </s-banner>}
       {!connected&&<s-banner tone="warning" heading="Offline">{canCount?'Keep counting. Scans are saved on this terminal and match and sync after reconnecting.':'Saved sessions are available. Sessions this terminal already holds can keep counting; sync resumes after reconnecting.'}</s-banner>}
       {route==='opening'&&<s-section heading={opening?.name||'Session'}><s-stack direction="block" gap="base">
-        <s-text>{busy?'Opening session…':'The session could not be opened.'}</s-text>
-        {busy?<s-text color="subdued">Loading saved quantities and checking session access.</s-text>:<s-button variant="primary" onClick={()=>loadSession(opening.sessionId,opening.name)}>Try again</s-button>}
+        <s-text>{busy?'Opening session…':reattachTarget.current?'This session is ready to continue.':'The session could not be opened.'}</s-text>
+        {busy?<s-text color="subdued">Loading saved quantities and checking session access.</s-text>
+          :reattachTarget.current?<s-stack direction="inline"><s-button variant="primary" onClick={()=>void reattach()}>Continue counting</s-button></s-stack>
+          :<s-button variant="primary" onClick={()=>loadSession(opening.sessionId,opening.name)}>Try again</s-button>}
       </s-stack></s-section>}
+
       {route==='home'&&<>
         {contextProduct&&<s-banner tone="info" heading={`Count ${contextProduct.sku||contextProduct.title}`}>Choose a session or start a count. Product identity has been confirmed in HotWax.</s-banner>}
         {resume&&<s-section heading="Continue your count"><s-stack direction="block" gap="base"><s-text>{resume.name}</s-text><s-button variant="primary" disabled={busy} onClick={()=>open(resume.sessionId,resume.name)}>Resume counting</s-button></s-stack></s-section>}
-        {history?.canCreate&&<s-stack direction="inline"><s-button variant={resume?'secondary':'primary'} disabled={busy} onClick={()=>go('new')}>Create count</s-button></s-stack>}
+        {history?.canCreate&&<s-stack direction="inline"><s-button variant={resume?'secondary':'primary'} disabled={busy} onClick={()=>openPage(COUNT_CREATE,{})}>Create count</s-button></s-stack>}
         <s-section heading="Store counts"><s-stack direction="block" gap="base">
           <s-tabs value={group} disabled={busy} onChange={e=>{const next=e.currentTarget.value;setGroup(next);run(()=>refresh(0,next));}}><s-tab-list><s-tab controls="active">Active</s-tab><s-tab controls="submitted">Approval</s-tab><s-tab controls="history">History</s-tab></s-tab-list><s-tab-panel id="active"/><s-tab-panel id="submitted"/><s-tab-panel id="history"/></s-tabs>
           <DividedRows>{history?.counts.map(item=><ActionRow key={item.workEffortId} title={item.name} detail={`${countTypeName(item.type)} · ${amount(item.sessions,'session')}${item.mySessions?` · ${item.mySessions} yours`:''}`} meta={workStatus(item.statusId)} disabled={busy} onClick={()=>openPage(COUNT_SUMMARY,{workEffortId:item.workEffortId})}/>)}</DividedRows>
@@ -526,95 +575,127 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
           {history&&(history.pageIndex>0||history.nextPage!==null)&&<s-stack direction="inline" gap="base"><s-button disabled={busy||!history.pageIndex} onClick={()=>run(()=>refresh(history.pageIndex-1))}>Previous</s-button><s-text>Page {history.pageIndex+1}</s-text><s-button disabled={busy||history.nextPage===null} onClick={()=>run(()=>refresh(history.nextPage))}>Next</s-button></s-stack>}
         </s-stack></s-section>
         {!history&&error&&<s-button variant="primary" disabled={busy} onClick={()=>run(()=>refresh())}>Reconnect to HotWax</s-button>}
+        {/* POS action-bar buttons cannot open a sheet, so these stay on the page. */}
+        <s-stack direction="inline" gap="base">
+          <s-button variant="tertiary" disabled={busy} onClick={()=>run(()=>refresh(0,group))}>Refresh</s-button>
+          <s-button variant="tertiary" disabled={busy} onClick={()=>openPage(COUNT_SAVED,{})}>Saved sessions on this device ({catalog.length})</s-button>
+        </s-stack>
       </>}
-      {count&&['count','context'].includes(route)&&<s-stack direction="block" gap="large">
-        {route==='context'&&selected?<s-section heading={selected.title}><s-stack direction="block" gap="base"><s-text>{selected.sku} · {selected.quantity??0} counted here</s-text><s-button variant="primary" disabled={busy||!canCount} onClick={async()=>{if(await enqueue({code:selected.sku||selected.productId,productId:selected.productId,source:'product-context'})){context.current=null;setContextProduct(null);go('count');}}}>Count one unit</s-button><s-button disabled={busy||!canCount} onClick={()=>go('product')}>Enter a total quantity</s-button></s-stack></s-section>:<>
-          {canCount&&((last&&last.source!=='correction')||posScannerConnected||hidMode)&&<ScanFeedback last={last?.source==='correction'?null:last} hidMode={hidMode}/>}
-          {emptySession?<s-empty-state heading="Count your first product" subheading={cameraAvailable||posScannerConnected||hidMode?'Scan a barcode or use Hand count to find a product and enter its quantity.':'Use Hand count to find a product and enter its quantity.'}>
-            <s-button slot="primary-action" variant="primary" disabled={busy||!canCount} onClick={handCount}>Hand count</s-button>
-            {cameraAvailable&&<s-button slot="secondary-actions" disabled={busy||!canCount} onClick={scanWithCamera}>Scan with camera</s-button>}
-          </s-empty-state>:<s-stack direction="inline" gap="base">
-            {/* POS allows one header button (Complete session), so More stays here as the quietest action. */}
-            <s-button variant="primary" disabled={busy||!canCount} onClick={handCount}>Hand count</s-button>
-            {cameraAvailable&&<s-button disabled={busy||!canCount} onClick={scanWithCamera}>Scan with camera</s-button>}
-            {sessionToolbar&&<s-button variant="tertiary" disabled={busy} onClick={()=>go('options')}>More</s-button>}
-          </s-stack>}
-          {/* One status line; badges appear only for a connected scanner or a lock that needs attention. */}
-          <s-stack direction="inline" gap="base" alignItems="center">
-            {!emptySession&&<s-clickable onClick={()=>go('options')}><s-box minBlockSize="24px"><s-text color="subdued" tone={syncError?'critical':'auto'}>{`${progressText} · ${saveText}`}</s-text></s-box></s-clickable>}
-            {posScannerConnected&&<s-badge tone="success">Scanner connected</s-badge>}
-            {lockTone!=='success'&&<s-badge tone={lockTone}>{lockLabel}</s-badge>}
-            {emptySession&&<s-button variant="tertiary" disabled={busy} onClick={()=>go('options')}>More</s-button>}
-          </s-stack>
-          {hidMode&&<HidBarcodeEntry key={count.sessionId} disabled={busy||!canCount} add={enqueue}/>}
-        </>}
+
+      {route==='saved'&&<><DividedRows>{catalog.slice(localPage*20,(localPage+1)*20).map(item=><ActionRow key={item.sessionId} title={item.name||item.sessionId} meta={editable(item.statusId)?'Resume':'View'} disabled={busy} onClick={()=>open(item.sessionId,item.name)}/>)}</DividedRows>{!catalog.length&&<s-text>No saved sessions for this operator at this store.</s-text>}<CompactPager page={localPage} pages={Math.max(1,Math.ceil(catalog.length/20))} total={catalog.length} label="sessions" onPage={setLocalPage}/></>}
+
+      {count&&route==='context'&&selected&&<>
+        <s-section heading={selected.title}><s-stack direction="block" gap="base">
+          <s-text color="subdued">Product identity has been confirmed in HotWax.</s-text>
+          <DividedRows><ProductRow item={selected} disabled={busy||!canCount} onQuantity={changeQuantity} onQuantityInput={editQuantity} onActivate={()=>{}}/></DividedRows>
+        </s-stack></s-section>
+        <s-button variant="primary" disabled={busy} onClick={()=>{context.current=null;setContextProduct(null);go('count');}}>Continue counting</s-button>
+      </>}
+
+      {count&&route==='count'&&<s-stack direction="block" gap="large">
+        {canCount&&((last&&last.source!=='correction')||posScannerConnected||hidMode)&&<ScanFeedback last={last?.source==='correction'?null:last} hidMode={hidMode}/>}
+        {emptySession&&<s-banner tone="info" heading="Count your first product">{cameraAvailable||posScannerConnected||hidMode?'Scan a barcode, or search below and enter a quantity.':'Search below for a product and enter its quantity.'}</s-banner>}
+        {/* POS allows one header button (Complete session), so More stays here as the quietest action. */}
+        <s-stack direction="inline" gap="base">
+          {cameraAvailable&&<s-button variant="primary" disabled={busy||!canCount} onClick={scanWithCamera}>Scan with camera</s-button>}
+          <s-button variant="tertiary" disabled={busy} command="--show" commandFor="session-options">More</s-button>
+        </s-stack>
+        {/* One status line; badges appear only for a connected scanner or a lock that needs attention. */}
+        <s-stack direction="inline" gap="base" alignItems="center">
+          <s-text color="subdued" tone={syncError?'critical':'auto'}>{`${progressText} · ${saveText}`}</s-text>
+          {posScannerConnected&&<s-badge tone="success">Scanner connected</s-badge>}
+          {lockTone!=='success'&&<s-badge tone={lockTone}>{lockLabel}</s-badge>}
+        </s-stack>
+        {hidMode&&<HidBarcodeEntry key={count.sessionId} disabled={busy||!canCount} add={enqueue}/>}
       </s-stack>}
-      {count&&route==='match'&&issue&&<><s-text>Match {issue.code} to the correct product. Its saved quantity will be kept.</s-text><CatalogPicker request={request} disabled={busy||!canCount} onPick={product=>run(async()=>{await engine.current.matchUnmatched(issue.id,product);showUnmatchedScans();})}/></>}
+
+      {route==='cameraConfirm'&&<><s-section heading={cameraProduct?.title||cameraCode}><s-stack direction="block" gap="base"><s-text>{cameraCode}</s-text><s-text color="subdued">{cameraProduct?.productId?`${count?.items.find(p=>p.productId===cameraProduct.productId)?.quantity||0} already counted`:'The scan will be saved and matched in HotWax.'}</s-text><s-number-field label="Additional units" value={cameraQuantity} min={1} max={1000000} onInput={e=>setCameraQuantity(e.currentTarget.value)}/></s-stack></s-section>
+        <s-stack direction="inline" gap="base"><s-button variant="primary" disabled={busy||!canCount} onClick={async()=>{if(await enqueue({code:cameraCode,quantity:Number(cameraQuantity),product:cameraProduct,productId:cameraProduct?.productId,source:'camera-confirm'}))go('count');}}>Add units</s-button><s-button disabled={busy} onClick={()=>go('count')}>Skip this scan</s-button></s-stack></>}
+
+      {count&&route==='submitted'&&<><s-banner tone="success" heading="Saved in HotWax"/><s-text>Your part is saved. Finish the count from its summary.</s-text><s-button variant="primary" disabled={busy} onClick={()=>leave(true)}>Count summary</s-button></>}
+      {count&&route==='readonly'&&<><s-section heading={countStatus(count)}><s-stack direction="block" gap="base"><s-text>You can view this session. Use More to reopen a submitted session while the count is in progress.</s-text></s-stack></s-section>
+        <s-stack direction="inline" gap="base"><s-button variant="primary" disabled={busy} onClick={()=>leave(true)}>Count summary</s-button><s-button variant="tertiary" disabled={busy} command="--show" commandFor="session-options">More</s-button></s-stack></>}
+
       {count&&route==='editSession'&&<>
         <s-text-field label="Session name" value={editName} disabled={busy} onInput={e=>setEditName(e.currentTarget.value)}/>
         <s-text type="strong">Session location</s-text>
         {/* Sessions created elsewhere (for example in the Ionic app) can have no location. */}
         {!AREAS.some(area=>area.id===editArea)&&<s-text color="subdued">No location is set for this session yet. Choose where it counts before saving.</s-text>}
         <s-choice-list values={[editArea]} onChange={e=>setEditArea(e.currentTarget.values[0])}>{AREAS.map(area=><s-choice key={area.id} value={area.id} disabled={busy}>{area.name}</s-choice>)}</s-choice-list>
-        <s-button variant="primary" disabled={busy||!canCount} onClick={()=>run(async()=>{await engine.current.prepareSubmission();const result=await ownership.current.write('editSession',{sessionId:count.sessionId,name:editName,area:editArea});await attach(result);})}>Save session</s-button>
+        <s-button variant="primary" disabled={busy||!canCount||!editName.trim()||!AREAS.some(area=>area.id===editArea)} onClick={()=>run(async()=>{await engine.current.prepareSubmission();await ownership.current.write('editSession',{sessionId:count.sessionId,name:editName,area:editArea});await finishTool('Session saved');})}>Save session</s-button>
       </>}
-      {count&&route==='discard'&&<><s-text>Discard {count.name}? Its quantities will be excluded from the team count. Other sessions stay available.</s-text><s-button variant="primary" disabled={busy||!canCount} onClick={()=>run(async()=>{await engine.current.prepareSubmission();const result=await ownership.current.write('discardSession',{sessionId:count.sessionId});await ownership.current.release();await attach(result);})}>Discard this session</s-button></>}
-      {count&&route==='forceRelease'&&<><s-text>Make sure counting has stopped on {lease?.deviceId}. Taking over ends its current lock; unsynced scans on that register must be reconciled before use.</s-text><s-button variant="primary" disabled={busy} onClick={()=>run(async()=>{await request('leaseForceRelease',{sessionId:count.sessionId,lease});await ownership.current.claim();setLeaseProblem('');go('count');})}>Release lock and take over</s-button></>}
-      {route==='camera'&&<><s-text type="strong">Camera counting mode</s-text><s-choice-list values={[cameraMode]} onChange={e=>setCameraMode(e.currentTarget.values[0])}><s-choice value="rapid">Rapid: add one unit per scan</s-choice><s-choice value="confirm">Confirm: enter a quantity after each scan</s-choice></s-choice-list><s-text color="subdued">Rapid mode ignores the same camera barcode for one second. Hardware scanner repeats remain separate scans.</s-text><s-button variant="primary" onClick={()=>go('count')}>Done</s-button></>}
-      {route==='cameraConfirm'&&<><s-section heading={cameraProduct?.title||cameraCode}><s-stack direction="block" gap="base"><s-text>{cameraCode}</s-text><s-text color="subdued">{cameraProduct?.productId?`${count?.items.find(p=>p.productId===cameraProduct.productId)?.quantity||0} already counted`:'The scan will be saved and matched in HotWax.'}</s-text><s-number-field label="Additional units" value={cameraQuantity} min={1} max={1000000} onInput={e=>setCameraQuantity(e.currentTarget.value)}/></s-stack></s-section><s-button variant="primary" disabled={busy||!canCount} onClick={async()=>{if(await enqueue({code:cameraCode,quantity:Number(cameraQuantity),product:cameraProduct,productId:cameraProduct?.productId,source:'camera-confirm'}))go('count');}}>Add units</s-button></>}
-      {count&&route==='product'&&selected&&(canCount?<QuantityEditor key={selected.productId} item={selected} disabled={busy} onSave={async job=>{if(await enqueue(job)){await engine.current.aggregate();go(sessionRoute);}}}/>:<s-section heading={selected.title}><s-stack direction="block" gap="base"><s-text>{selected.sku} · {selected.quantity==null?'Not counted':`${selected.quantity} counted`}</s-text>{count.canViewOnHand&&<s-text>On hand {selected.onHand??'unavailable'}</s-text>}</s-stack></s-section>)}
-      {count&&route==='submitted'&&<><s-banner tone="success" heading="Saved in HotWax"/><s-text>Your part is saved. Finish the count from its summary.</s-text><s-button variant="primary" disabled={busy} onClick={()=>leave(true)}>Count summary</s-button></>}
-      {count&&route==='readonly'&&<><s-section heading={countStatus(count)}><s-stack direction="block" gap="base"><s-text>You can view this session. Use session options to reopen a submitted session while the count is in progress.</s-text></s-stack></s-section><ActionRow title="Count summary" onClick={()=>leave(true)}/></>}
+      {count&&route==='discard'&&<><s-text>Discard {count.name}? Its quantities will be left out of the team count. Other sessions stay available.</s-text>
+        <s-button variant="primary" tone="critical" disabled={busy||!canCount} onClick={()=>run(async()=>{await engine.current.prepareSubmission();await ownership.current.write('discardSession',{sessionId:count.sessionId});await ownership.current.release();await finishTool('Session discarded');})}>Discard this session</s-button></>}
+      {count&&route==='forceRelease'&&<><s-text>{lease?.deviceId?`Make sure counting has stopped on ${lease.deviceId}${lease.operator?` (${lease.operator})`:''}.`:'This session is not locked on another register.'} Taking over ends its lock; unsynced scans on that register must be reconciled before it is used again.</s-text>
+        <s-button variant="primary" disabled={busy||!canTakeOver} onClick={()=>run(async()=>{await request('leaseForceRelease',{sessionId:count.sessionId,lease});await ownership.current.claim();await finishTool('Session taken over');})}>Release lock and take over</s-button></>}
+
+      {count&&route==='troubleshoot'&&<>
+        <s-section heading="Sync"><s-stack direction="block" gap="base">
+          <s-text>{syncText}</s-text>{syncError&&<s-banner tone="warning" heading={syncError}/>}
+          {count.editable&&<s-stack direction="inline" gap="base">
+            <s-button disabled={busy||saving} onClick={sync}>Retry sync · {amount(pending,'pending change')}</s-button>
+            <s-button disabled={busy||saving} onClick={compare}>Compare with HotWax</s-button>
+          </s-stack>}
+        </s-stack></s-section>
+        {compared&&(conflicts.length?<s-section heading={`${conflicts.length} quantities to reconcile`}><s-stack direction="block" gap="base"><s-text type="strong">{conflicts[0].sku||conflicts[0].title}</s-text><s-text>This register: {conflicts[0].quantity} · HotWax: {conflicts[0].serverQuantity??'Not counted'}</s-text>
+          <s-stack direction="inline" gap="base">{[false,true].map(useServer=><s-button key={String(useServer)} disabled={busy} onClick={()=>run(async()=>{const item=conflicts[0];await engine.current.reconcile(item.productId,item.serverQuantity,useServer);setConflicts(old=>old.slice(1));if(conflicts.length===1)setSyncError('');})}>{useServer?'Use HotWax quantity':'Keep this register’s quantity'}</s-button>)}</s-stack></s-stack></s-section>
+          :<s-banner tone="success" heading="No unsynced quantities to reconcile"/>)}
+        <s-section heading="This register"><s-stack direction="block" gap="small">
+          <s-text>{shopify.device.name} · {shopify.device.registerName}</s-text>
+          {count.editable&&<><s-stack direction="inline"><s-badge tone={lockTone}>{lockLabel}</s-badge></s-stack>{lease?.deviceId&&<s-text color="subdued">Lock terminal: {lease.deviceId}{lease.operator?` · ${lease.operator}`:''}</s-text>}{lease?.lastHeartbeatAt&&<s-text color="subdued">Last heartbeat: {new Date(lease.lastHeartbeatAt).toLocaleTimeString()}</s-text>}</>}
+        </s-stack></s-section>
+        {!count.editable&&<s-section heading="Local copy"><s-stack direction="block" gap="base">
+          <s-text>Removing the local copy deletes this session’s scan history from this register. Submitted quantities stay in HotWax.</s-text>
+          <s-stack direction="inline"><s-button disabled={busy} onClick={removeLocal}>Remove verified local copy</s-button></s-stack>
+        </s-stack></s-section>}
+      </>}
+
       {route==='issue'&&(issue||matchingFeedback?.id===issueId)&&<>
         <s-section heading={issue?.code||matchingFeedback?.code}><s-stack direction="block" gap="base">
           <s-text type="strong">{matchingFeedback?.pending?'Checking HotWax…':matchingFeedback?.failed?'Matching could not finish':matchingFeedback?.remaining?'Still unmatched':!issue?'Scan matched':'Unmatched scan'}</s-text>
           <s-text>{matchingFeedback?.pending?'Looking for a matching product.':matchingFeedback?.reason||(!issue&&matchingFeedback?.product?`${matchingFeedback.product.title} · ${matchingFeedback.product.quantity} counted in this session`:issue?.message)}</s-text>
-          <s-text color="subdued">{issue?'Your scan is saved. Find the correct product or check its barcode. Removing this scan excludes it from your count.':'The matched quantity is saved on this device and will sync automatically.'}</s-text>
+          <s-text color="subdued">{issue?'Your scan is saved. Choose the correct product below, retry matching, or remove the scan to leave it out of your count.':'The matched quantity is saved on this register and will sync automatically.'}</s-text>
         </s-stack></s-section>
         {issue?<>
-          <s-button variant="primary" disabled={busy||!canCount} onClick={()=>go('match')}>Find the correct product</s-button>
-          <s-button loading={!!matchingFeedback?.pending} disabled={busy||!canCount} onClick={()=>retryMatching(issue)}>Retry matching</s-button>
-          <s-button disabled={busy||!canCount} onClick={()=>run(async()=>{await engine.current.discardUnmatched(issue.id);showUnmatchedScans();})}>Remove this unmatched scan</s-button>
-        </>:<s-button variant="primary" disabled={busy} onClick={()=>showUnmatchedScans()}>Back to unmatched scans</s-button>}
+          <s-stack direction="inline" gap="base">
+            <s-button loading={!!matchingFeedback?.pending} disabled={busy||!canCount} onClick={()=>retryMatching(issue)}>Retry matching</s-button>
+            <s-button tone="critical" disabled={busy||!canCount} onClick={()=>run(async()=>{await engine.current.discardUnmatched(issue.id);await finishTool('Scan removed');})}>Remove this scan</s-button>
+          </s-stack>
+          <s-text type="strong">Find the correct product</s-text>
+          <CatalogPicker request={request} disabled={busy||!canCount} onPick={product=>run(async()=>{await engine.current.matchUnmatched(issue.id,product);await finishTool('Scan matched');})}/>
+        </>:<s-stack direction="inline"><s-button variant="primary" disabled={busy} onClick={()=>void finishTool()}>Done</s-button></s-stack>}
       </>}
-      {route==='compare'&&<>{conflicts.length?<s-section heading={`${conflicts.length} quantities to reconcile`}><s-stack direction="block" gap="base"><s-text type="strong">{conflicts[0].sku||conflicts[0].title}</s-text><s-text>This device: {conflicts[0].quantity} · HotWax: {conflicts[0].serverQuantity??'Not counted'}</s-text>{[false,true].map(useServer=><s-button key={String(useServer)} disabled={busy} onClick={()=>run(async()=>{const item=conflicts[0];await engine.current.reconcile(item.productId,item.serverQuantity,useServer);setConflicts(old=>old.slice(1));if(conflicts.length===1){setSyncError('');go('count');}})}>{useServer?'Use HotWax quantity':'Keep this device’s quantity'}</s-button>)}</s-stack></s-section>:<s-banner tone="success" heading="No unsynced quantities to reconcile"/>}</>}
-      {route==='options'&&<>
-        {count?<>
-          {/* Everyday actions first; sync and lock diagnostics sit in Troubleshooting at the end. */}
-          {count.editable&&<s-section heading="Counting"><DividedRows>
-            <ActionRow title="Barcode scanner" detail={hidMode?'Keyboard scanner on':'Use a keyboard scanner'} onClick={()=>{setHidMode(value=>!value);go('count');}}/>
-            {sources.includes('camera')&&<ActionRow title="Camera counting" detail={cameraMode==='rapid'?'Rapid scanning':'Confirm quantity after scanning'} onClick={()=>go('camera')}/>}
-            <ActionRow title="Scan history" onClick={()=>{setSessionTab('scans');go(dynamic?'scanHistory':'count');}}/>
-          </DividedRows></s-section>}
-          <s-section heading="Session"><DividedRows>
-            {count.editable&&<ActionRow title="Edit session" detail="Change the name or location" disabled={busy||!canCount} onClick={()=>{setEditName(count.name);setEditArea(count.area);go('editSession');}}/>}
-            {count.statusId==='SESSION_SUBMITTED'&&count.countStatusId==='CYCLE_CNT_IN_PRGS'&&<ActionRow title="Reopen session" detail="Continue counting or correct submitted quantities" disabled={busy} onClick={()=>run(async()=>{const result=await request('reopenSession',{sessionId:count.sessionId});await attach(result);})}/>}
-            {count.editable&&<ActionRow title="Save and release this session" detail="Let another register continue it" disabled={busy||saving||!canCount} onClick={()=>run(async()=>{await engine.current.prepareSubmission();await ownership.current.release();await closeSession();returnToParent();})}/>}
-            {count.editable&&!lease?.owned&&lease?.fromDate&&(count.canRelease||lease.operator===count.currentOperator)&&<ActionRow title="Take over session" detail="Continue a session open on another register" disabled={busy} onClick={()=>go('forceRelease')}/>}
-            <ActionRow title={page.fromSummary?"Count summary":"All store counts"} onClick={()=>leave(false)}/>
-            {count.editable&&<ActionRow title="Discard session" detail="Leave this session out of the count" disabled={busy||!canCount} onClick={()=>go('discard')}/>}
-          </DividedRows></s-section>
-          <s-section heading="Troubleshooting"><s-stack direction="block" gap="base">
-            <s-text color="subdued">{syncText}</s-text>{syncError&&<s-banner tone="warning" heading={syncError}/>}
-            <DividedRows>
-              {count.editable&&<ActionRow title="Retry sync" detail={`${pending} pending changes`} disabled={busy||saving} onClick={sync}/>}
-              {count.editable&&<ActionRow title="Compare with HotWax" detail="Resolve a quantity changed on another register" disabled={busy||saving} onClick={compare}/>}
-              {!count.editable&&<ActionRow title="Remove local copy" detail="Only after HotWax has finished with this session" onClick={()=>go('remove')}/>}
-            </DividedRows>
-            <s-text color="subdued">{shopify.device.name} · {shopify.device.registerName}</s-text>
-            {count.editable&&<s-stack direction="block" gap="small"><s-stack direction="inline"><s-badge tone={lockTone}>{lockLabel}</s-badge></s-stack>{lease?.deviceId&&<s-text color="subdued">Lock terminal: {lease.deviceId}{lease.operator?` · ${lease.operator}`:''}</s-text>}{lease?.lastHeartbeatAt&&<s-text color="subdued">Last heartbeat: {new Date(lease.lastHeartbeatAt).toLocaleTimeString()}</s-text>}</s-stack>}
-          </s-stack></s-section>
-        </>:<><ActionRow title="Refresh store counts" onClick={()=>run(async()=>{await refresh();go('home');})}/><ActionRow title="Saved sessions on this device" meta={String(catalog.length)} onClick={()=>go('saved')}/></>}
-      </>}
-      {route==='saved'&&<><DividedRows>{catalog.slice(localPage*20,(localPage+1)*20).map(item=><ActionRow key={item.sessionId} title={item.name||item.sessionId} meta={editable(item.statusId)?'Resume':'View'} disabled={busy} onClick={()=>open(item.sessionId,item.name)}/>)}</DividedRows>{!catalog.length&&<s-text>No saved sessions for this operator at this store.</s-text>}<CompactPager page={localPage} pages={Math.max(1,Math.ceil(catalog.length/20))} total={catalog.length} label="sessions" onPage={setLocalPage}/></>}
-      {route==='remove'&&<><s-text>This removes this session’s scan history from this register. Submitted quantities stay in HotWax.</s-text><s-button variant="primary" disabled={busy} onClick={removeLocal}>Remove verified local copy</s-button></>}
-      {route==='scanHistory'&&scanHistoryList}
-      {count&&isSessionDetail&&count.items.length>0&&(dynamic?sessionProducts('all'):<s-tabs value={sessionTab} onChange={e=>selectSessionTab(e.currentTarget.value)}>
-        <s-tab-list>{sessionTabs.map(([id,label])=><s-tab key={id} controls={id}>{label}</s-tab>)}</s-tab-list>
-        {sessionTabs.map(([id])=><s-tab-panel key={id} id={id}>
+
+      {count&&isSessionDetail&&(count.items.length>0||count.editable)&&<s-tabs value={sessionTab} onChange={e=>selectSessionTab(e.currentTarget.value)}>
+        <s-tab-list>{tabs.map(([id,label])=><s-tab key={id} controls={id}>{label}</s-tab>)}</s-tab-list>
+        {tabs.map(([id])=><s-tab-panel key={id} id={id}>
           {sessionTab===id&&(id==='scans'?scanHistoryList:sessionProducts(id))}
         </s-tab-panel>)}
-      </s-tabs>)}
+      </s-tabs>}
+
+      {/* Each group is its own container: POS can reorder siblings that follow a conditional group. */}
+      {count&&isSessionDetail&&<s-modal id="session-options" heading="Session options">
+        <s-stack direction="block" gap="base">
+          {count.editable&&<s-stack direction="block" gap="base">
+            <s-button {...hideOptions} onClick={()=>setHidMode(value=>!value)}>{hidMode?'Turn off keyboard scanner':'Use a keyboard scanner'}</s-button>
+            {cameraAvailable&&<s-button {...hideOptions} onClick={()=>setCameraMode(mode=>mode==='rapid'?'confirm':'rapid')}>{cameraMode==='rapid'?'Camera: enter a quantity after each scan':'Camera: add one unit per scan'}</s-button>}
+            <s-button {...hideOptions} onClick={()=>selectSessionTab('scans')}>Scan history</s-button>
+            <s-button {...hideOptions} disabled={busy||!canCount} onClick={()=>void openTool('editSession')}>Edit session</s-button>
+            <s-button {...hideOptions} disabled={busy||saving||!canCount} onClick={()=>run(async()=>{await engine.current.prepareSubmission();await ownership.current.release();await closeSession();returnToParent();})}>Save and release this session</s-button>
+          </s-stack>}
+          {(canTakeOver||count.statusId==='SESSION_SUBMITTED'&&count.countStatusId==='CYCLE_CNT_IN_PRGS')&&<s-stack direction="block" gap="base">
+            {count.statusId==='SESSION_SUBMITTED'&&count.countStatusId==='CYCLE_CNT_IN_PRGS'&&<s-button {...hideOptions} disabled={busy} onClick={()=>run(async()=>{const result=await request('reopenSession',{sessionId:count.sessionId});await attach(result);})}>Reopen session</s-button>}
+            {canTakeOver&&<s-button {...hideOptions} disabled={busy} onClick={()=>void openTool('forceRelease')}>Take over session</s-button>}
+          </s-stack>}
+          <s-stack direction="block" gap="base">
+            <s-button {...hideOptions} disabled={busy} onClick={()=>void leave(true)}>Count summary</s-button>
+            <s-button {...hideOptions} disabled={busy} onClick={()=>void openTool('troubleshoot')}>Troubleshooting</s-button>
+          </s-stack>
+          {count.editable&&<s-stack direction="block" gap="base">
+            <s-button {...hideOptions} tone="critical" disabled={busy||!canCount} onClick={()=>void openTool('discard')}>Discard session</s-button>
+          </s-stack>}
+        </s-stack>
+      </s-modal>}
     </s-stack></s-box></s-scroll-box>
   </>;
 }

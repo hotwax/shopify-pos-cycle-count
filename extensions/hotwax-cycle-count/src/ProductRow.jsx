@@ -6,7 +6,7 @@ function ProductRowContent({item,selected,disabled,onSelect,onQuantity,onQuantit
   // The title already carries the product and variant names; the detail line
   // keeps only identifiers it does not repeat.
   const detail=[productDetail(title,[item.primary,item.secondary||item.sku||item.productId]),
-    item.isRequested===false?'Extra product':'',item.decision==='SKIPPED'?'Discarded':''].filter(Boolean).join(' · ');
+    item.notInSession?'Not in this session yet':item.isRequested===false?'Extra product':'',item.decision==='SKIPPED'?'Discarded':''].filter(Boolean).join(' · ');
   const quantity=item.quantity==null?'Uncounted':`${item.quantity} counted`;
   if(onQuantity)return <s-section>
     <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
@@ -14,7 +14,9 @@ function ProductRowContent({item,selected,disabled,onSelect,onQuantity,onQuantit
         <Thumbnail src={item.imageUrl}/>
         <s-stack direction="block" gap="small" maxInlineSize="416px"><s-text type="strong">{title}</s-text><s-text color="subdued">{detail}</s-text></s-stack>
       </s-stack>
-      <InlineQuantity item={item} disabled={disabled} onQuantity={onQuantity} onQuantityInput={onQuantityInput} onActivate={onActivate}/>
+      {/* A catalog match a directed count did not request explains why it has no stepper. */}
+      {item.unavailable?<s-text color="subdued">{item.unavailable}</s-text>
+        :<InlineQuantity item={item} disabled={disabled} onQuantity={onQuantity} onQuantityInput={onQuantityInput} onActivate={onActivate}/>}
     </s-stack>
   </s-section>;
   if(selected!==undefined)return <s-choice-list multiple values={selected?[item.productId]:[]} onChange={()=>onSelect?.(item)}>

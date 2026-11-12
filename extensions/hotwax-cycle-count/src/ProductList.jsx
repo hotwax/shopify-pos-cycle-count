@@ -12,7 +12,7 @@ export function CompactPager({page,pages,total,onPage,disabled,label='products'}
     <s-button disabled={disabled||page+1>=pages} onClick={()=>onPage(page+1)}>Next</s-button>
   </s-stack>;
 }
-function ProductListContent({items,disabled=false,directed=false,onSelect,onQuantity,onQuantityInput,selected,initialView='all',filters=true,showTabs=true,activeView,memory,countExtras=false,renderViewActions,listIndex,search:searchShop,onVisible}) {
+function ProductListContent({items,disabled=false,directed=false,onSelect,onQuantity,onQuantityInput,selected,initialView='all',filters=true,showTabs=true,activeView,memory,countExtras=false,renderViewActions,listIndex,search:searchShop,onVisible,findMore}) {
   // Keep the product being edited visible in Uncounted until staff move on.
   const [editingId,setEditingId]=useState('');
   const [search,setSearch]=useState(memory?.search||''),[selectedView,setView]=useState(memory?.view||initialView),[page,setPage]=useState(memory?.page||0);
@@ -52,6 +52,20 @@ function ProductListContent({items,disabled=false,directed=false,onSelect,onQuan
     const shown=new Set(ordered),ids=list.sort([...shown,...list.list(search,viewKey,editingId).filter(id=>!shown.has(id))],sort);
     return {...list.slice(ids,page),prefetch:list.slice(ids,page+1).items};
   },[items,search,viewKey,page,sort,remote,editingId]);
+  // A session's search also looks through the catalog, so a product not in the
+  // session yet can be counted from the same row (this replaces Hand count).
+  const [more,setMore]=useState(null);
+  const searchMore=!!findMore&&query.length>=2&&view!=='counted';
+  useEffect(()=>{
+    if(!searchMore){setMore(null);return;}
+    let stale=false;
+    setMore(old=>old?.query===query?old:{query,items:[],loading:true});
+    findMore(query).then(found=>{if(!stale)setMore({query,items:found,loading:false});})
+      .catch(()=>{if(!stale)setMore({query,items:[],loading:false,failed:true});});
+    return()=>{stale=true;};
+  },[findMore,query,searchMore]);
+  const memberIds=useMemo(()=>new Set(items.map(item=>item.productId)),[items]);
+  const extra=more?.query===query?more.items.filter(item=>!memberIds.has(item.productId)):[];
   // Hydrate the rendered page plus the next one.
   useEffect(()=>{onVisible?.([...result.items,...(result.page===page?result.prefetch:[])]);},[result.items,onVisible]);
   const views=[['all','All'],['uncounted','Uncounted'],['counted','Counted'],...(directed?[['undirected','Extra']]:[])];
@@ -76,6 +90,14 @@ function ProductListContent({items,disabled=false,directed=false,onSelect,onQuan
       {result.items.map(item=><ProductRow key={item.productId} item={item} selected={selected?.has(item.productId)} disabled={disabled} onSelect={onSelect} onQuantity={onQuantity} onQuantityInput={onQuantityInput} onActivate={setEditingId}/>)}
     </DividedRows>
     {result.total>PRODUCT_PAGE_SIZE&&<CompactPager {...result} disabled={disabled} onPage={setPage}/>}
+    {searchMore&&<s-section heading="Not in this session yet"><s-stack direction="block" gap="base">
+      {more?.loading&&!extra.length&&<s-text color="subdued">Searching the catalog…</s-text>}
+      {more?.failed&&<s-text color="subdued">The catalog could not be searched. Check the connection and search again.</s-text>}
+      {more&&!more.loading&&!more.failed&&!extra.length&&<s-text color="subdued">No other products match.</s-text>}
+      {/* A directed count cannot take them, so say so once instead of listing rows that cannot be counted. */}
+      {extra.length>0&&extra.every(item=>item.unavailable)?<s-text color="subdued">{extra.length===1?'1 other product matches':`${extra.length} other products match`} in the catalog. This count only takes its requested products; scan a product to record it as an extra.</s-text>
+      :<DividedRows key={`more:${query}`}>{extra.slice(0,20).map(item=><ProductRow key={item.productId} item={item} disabled={disabled} onQuantity={onQuantity} onQuantityInput={onQuantityInput} onActivate={setEditingId}/>)}</DividedRows>}
+    </s-stack></s-section>}
   </s-stack>;
 }
 export const ProductList=memo(ProductListContent);

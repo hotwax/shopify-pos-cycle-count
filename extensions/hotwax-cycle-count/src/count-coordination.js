@@ -16,10 +16,17 @@ function heartbeat(storage,key,value) {
   };
   return {renew,close};
 }
-export async function enterForeground(storage,owner) {
+export async function enterForeground(storage,owner,{takeOverStale=false}={}) {
   // A native Back can expose another session before the popped runtime has
   // finished its journal writes. Let that runtime close or its heartbeat expire.
-  while ((await storage.get(FOREGROUND))?.expiresAt > Date.now()) await delay(200);
+  // takeOverStale: a screen that reappears after Back is the only visible one, so a
+  // flag that stops renewing for one renew period belongs to a closed screen.
+  let seen,since=Date.now();
+  for (let flag; (flag=await storage.get(FOREGROUND))?.expiresAt > Date.now();) {
+    if (flag.expiresAt !== seen) {seen=flag.expiresAt;since=Date.now();}
+    else if (takeOverStale && Date.now()-since > FLAG_RENEW+500) break;
+    await delay(200);
+  }
   const flag = heartbeat(storage,FOREGROUND,{id:token(),owner});
   try {
     await flag.renew();

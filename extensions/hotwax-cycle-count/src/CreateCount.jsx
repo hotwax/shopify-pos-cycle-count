@@ -28,6 +28,7 @@ export function CreateCount({request,storage,owner,timeZone,onCreated,back}) {
     pending.current=operation;if(operation)setStep('review');
   })().catch(e=>setError(e instanceof Error?e.message:'Could not complete this action. Your saved work is retained.')).finally(()=>{if(active.current)setBusy(false);});return()=>{active.current=false;};},[]);
   async function saveDraft(){await control.setEntry('drafts',NEW,{name,type,start,due,productIds:[...selected.keys()]});}
+  useEffect(()=>{if(busy)return;const timer=setTimeout(()=>{saveDraft().catch(()=>{});},500);return()=>clearTimeout(timer);},[name,type,start,due,selected,busy]);
   async function next(value){try{if(!name.trim())throw new Error('Give the count a name.');if(start&&due&&start>due)throw new Error('The due date must be on or after the start date.');await saveDraft();setError('');setStep(value);}catch(e){setError(e instanceof Error?e.message:'Could not complete this action. Your saved work is retained.');}}
   function choose(product){setSelected(old=>{const next=new Map(old);if(next.has(product.productId))next.delete(product.productId);else if(next.size<2000)next.set(product.productId,product);return next;});}
   async function create(existingCountId=undefined,startNow=false){
@@ -50,7 +51,8 @@ export function CreateCount({request,storage,owner,timeZone,onCreated,back}) {
     }catch(e){if(active.current)setError(e instanceof Error?e.message:'Could not complete this action. Your saved work is retained.');}finally{if(active.current)setBusy(false);}
   }
   return <s-scroll-box key={step}><s-box padding="large"><s-stack direction="block" gap="large">
-    <BackButton loading={busy} disabled={busy} onClick={()=>{if(step==='details'){saveDraft().then(back).catch(e=>setError(e instanceof Error?e.message:'Could not complete this action. Your saved work is retained.'));}else setStep(step==='review'&&type!=='DYNAMIC_COUNT'?'products':'details');}}>{step==='details'?'All counts':'Back'}</BackButton>
+    {/* The first step closes with the screen's native Back; later steps step back here. */}
+    {step!=='details'&&<BackButton loading={busy} disabled={busy} onClick={()=>setStep(step==='review'&&type!=='DYNAMIC_COUNT'?'products':'details')}>Back</BackButton>}
     {error&&<s-banner tone="critical" heading={error}/>}{progress&&<s-text>{progress}</s-text>}
     {step==='details'&&<>
       <s-section><s-stack direction="block" gap="base">
