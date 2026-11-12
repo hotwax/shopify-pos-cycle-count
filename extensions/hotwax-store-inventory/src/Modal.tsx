@@ -37,7 +37,7 @@ function Extension({screen,state}: {screen?: string; state: unknown}) {
   },[]);
 
   const scope = owner ? JSON.parse(owner) as InventoryScope : null;
-  if (!scope || scope.staffId!==scope.userId) return <s-page heading="Store inventory"><s-box padding="large">
+  if (!scope || scope.staffId!==scope.userId) return <s-page heading="Inventory sync"><s-box padding="large">
     <Warning reason="Sign in to Shopify POS with your own account and pin in to continue."/>
   </s-box></s-page>;
 
@@ -59,7 +59,7 @@ function Extension({screen,state}: {screen?: string; state: unknown}) {
 function InventoryHome({scope,owner}: {scope: InventoryScope; owner: string}) {
   const store = useStoreLocation(scope);
   const {open,navigationError} = useScreenNavigation(owner);
-  return <s-page heading="Store inventory" subheading={store.location?.name}>
+  return <s-page heading="Inventory sync" subheading={store.location?.name}>
     <RefreshAction store={store}/>
     <s-scroll-box>
       <s-box padding="large">

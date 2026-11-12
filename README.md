@@ -111,11 +111,14 @@ The initial implementation has been deployed to a demo store and opened on a phy
 `gorjana-sandbox.myshopify.com`; use `https://gorjana-maarg-uat.hotwax.io` in App Home.
 The default `shopify.app.toml` still identifies the original HotWax app.
 
-The **Store inventory** tile (`extensions/hotwax-store-inventory`) reads the same App Home OMS
+The **Inventory sync** tile (`extensions/hotwax-store-inventory`) reads the same App Home OMS
 address as Cycle count, so it works in any shop where this app is set up. It relies on the
-OMS's Shopify inventory ledger (`/rest/s1/sob/shopify/locationInventoryAdjustmentDetails`, an entity
-list from shopify-connector v4.4.0); confirm it exists on the target OMS before releasing the tile to
-another shop. It shows only the register's own store.
+OMS's Shopify inventory ledger (`/rest/s1/sob/shopify/locationInventoryAdjustmentDetails`). From
+shopify-connector v4.4.0 that is an entity list the OMS filters. Before v4.4.0 it is a service that
+returns `{details, hasMore}` and filters only by location and event type; the tile then loads the
+store's whole ledger, 1,000 rows a page up to 10,000 rows, and filters it on the register. Confirm the
+endpoint exists on the target OMS before releasing the tile to another shop. It shows only the
+register's own store.
 
 **Send now** (deliver a product's waiting Shopify batches early) appears only for staff whose HotWax
 account has the `STORE_INV_PUSH` permission. The OMS does not define it: create the permission and
@@ -128,6 +131,19 @@ Use the named scripts so both build and deployment select the same sandbox confi
 ```sh
 npm run build:gorjana-sandbox
 npm run deploy:gorjana-sandbox -- --version <release-name> --message '<release-summary>'
+```
+
+### Gorjana production
+
+`shopify.app.gorjana-prod.toml` identifies the **HC Cycle Count Gorjana Prod** app
+(`d16d5723404e96a71f8ade62d2c88ef3`), custom-distributed to `gorjana.myshopify.com`. Its OMS is
+`https://gorjana-maarg.hotwax.io`, which runs shopify-connector v4.3.21. Since 2026-11-12 it has the
+same sign-in setup as UAT: remote `GORJANA_CC_PROD` (this client ID and its secret, no send URL or
+Shopify token), linked to shop `10000` with purpose `SsctCycleCountPosApp`, and the `DYNAMIC_COUNT`
+purpose. After install, save the OMS address in App Home.
+
+```sh
+npm run deploy:gorjana-prod -- --version <release-name> --message '<release-summary>'
 ```
 
 The UAT integration shop is `10000`. A legacy `HC_CUSTOM_APP` record shares its domain,

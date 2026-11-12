@@ -6,7 +6,7 @@ type = "ui_extension"
 name = "t:name"
 uid = "6ecc6dbb-a218-4da1-52a8-8e731ac98900fc0f397d"
 handle = "hotwax-cycle-count"
-description = "Count inventory locally and synchronize with HotWax OMS."
+description = "Count this product in HotWax"
 
 # module: file that contains your extension’s source code
 # target: location where your extension appears in POS

@@ -105,7 +105,7 @@ export class OmsConnection {
       // The legacy session-item endpoint aggregates inventory as well as count
       // rows. Reads are facility-scoped; retain a bounded allowance for slow instances.
       const sessionItems = !mutation && /^\/rest\/s1\/inventory-cycle-count\/cycleCounts\/sessions\/[^/]+\/items\?/.test(path);
-      const signals = [AbortSignal.timeout(Math.max(1, Math.min(mutation || sessionItems ? 25000 : 12000, mutation ? budget : remaining)))];
+      const signals = [AbortSignal.timeout(Math.max(1, Math.floor(Math.min(mutation || sessionItems ? 25000 : 12000, mutation ? budget : remaining))))];
       if (!this.writeStarted && this.identity.signal) signals.push(this.identity.signal);
       const response = await fetch(`${this.origin}${path}`, {
         ...init, redirect: "manual", signal: AbortSignal.any(signals),

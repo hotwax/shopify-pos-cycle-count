@@ -17,7 +17,7 @@ export async function omsScope() {
 // them (and the OMS login, see direct-oms) leaves one round trip per action.
 const contexts = new Map();
 // Product summaries and full session loads may need longer than the default read budget.
-const LONG_READS = new Set(['progress', 'detail']);
+const LONG_READS = new Set(['progress', 'detail', 'quickCountTarget', 'quickCountSave']);
 
 /**
  * @param {string} action

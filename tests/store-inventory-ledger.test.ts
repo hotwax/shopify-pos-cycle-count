@@ -152,6 +152,60 @@ test('counted quantities come from session totals, not the review sum that joins
   assert.deepEqual([variance.counted, variance.delta, variance.product.inShopify], [3, 2, false]);
 });
 
+// shopify-connector before v4.4.0 (Gorjana production on 2026-11-12): a service returning
+// {summary, details, hasMore, detailCount}, newest first, filtered only by location and event type.
+const legacyRow = (seq: number, item = '77', extra: Record<string, unknown> = {}) => ({
+  shopId: '10000', shopifyLocationId: '455', shopifyInventoryItemId: item, computedInventoryChange: -1,
+  eventTypeId: 'SIE_RESERVATION_CREATE', eventTypeDescription: 'Sales-order inventory reservation created',
+  eventReferenceId: 'O' + seq, createdDate: 1700000000000 + seq, ...extra,
+});
+const legacyPages = (pages: unknown[][]): Handler => url => {
+  const index = Number(url.searchParams.get('pageIndex'));
+  return {summary: {}, pageIndex: index, pageSize: 500, details: pages[index] ?? [], hasMore: index < pages.length - 1, detailCount: 0};
+};
+
+test('the older ledger format is read for this store and filtered on the register', async () => {
+  urls.length = 0;
+  const store = {...location};
+  const sent = {systemMessageId: 'M1', systemMessageStatusId: 'SmsgSent', systemMessageTypeId: 'ShopifyLocationInventoryAdjustment'};
+  handle = legacyPages([[legacyRow(5), legacyRow(4, '88'), legacyRow(3, '77', sent), legacyRow(2, '77', {computedInventoryChange: 0})],
+    [legacyRow(2, '77', {computedInventoryChange: 0}), legacyRow(1, '77', {systemMessageId: 'M2', systemMessageStatusId: 'SmsgError'})]]);
+  const {events, more} = await recentInventoryEvents(store, signal, {status: 'unsent'}, '77');
+  // Not the sent change, not the unbatched change of zero, and the row repeated across pages once.
+  assert.deepEqual(events.map(event => [event.reference, event.state]), [['O5', 'Unbatched'], ['O1', 'Error']]);
+  assert.equal(more, false);
+  assert.equal(new Set(events.map(event => event.id)).size, 2);
+  const reads = urls.slice(1).map(url => Object.fromEntries(url.searchParams));
+  assert.deepEqual(reads, [0, 1].map(index => ({shopId: '10000', shopifyLocationId: '455', pageSize: '1000', pageIndex: String(index)})));
+  // Reads within a few seconds reuse the loaded ledger: all changes, oldest first, since a time.
+  urls.length = 0;
+  const all = await recentInventoryEvents(store, signal, {status: 'all', since: 1700000000003, oldestFirst: true}, '77');
+  assert.deepEqual(all.events.map(event => event.reference), ['O3', 'O5']);
+  assert.equal(urls.length, 0);
+});
+
+test('the older ledger gives the item its unsent changes, a reset as a change, and the store summary', async () => {
+  const store = {...location};
+  const now = Date.now();
+  handle = legacyPages([[
+    legacyRow(3, '77', {eventTypeId: 'SIE_EXTERNAL_RESET', computedInventoryChange: 12, createdDate: now - 60000}),
+    legacyRow(2, '77', {systemMessageId: 'M2', systemMessageStatusId: 'SmsgSent', systemMessageTypeId: 'ShopifyLocationInventoryAdjustment',
+      createdDate: now - 120000, systemMessageProcessedDate: now - 60000}),
+    legacyRow(1, '88', {createdDate: now - 2 * 60 * 60 * 1000}),
+  ]]);
+  const pending = await productSyncEvents(store, '77', signal);
+  assert.deepEqual(pending.map(event => [event.eventType, event.delta, event.reset]), [['SIE_EXTERNAL_RESET', 12, false]]);
+  const summary = await inventorySyncSummary(store, signal);
+  assert.deepEqual([summary.pendingCount, summary.syncedCount, summary.averageSyncMs, summary.oldestPendingAt],
+    [2, 1, 60000, now - 2 * 60 * 60 * 1000]);
+});
+
+test('the older ledger refuses a store with more changes than it can load', async () => {
+  const store = {...location};
+  handle = url => ({details: [legacyRow(Number(url.searchParams.get('pageIndex')))], hasMore: true});
+  await assert.rejects(recentInventoryEvents(store, signal), /more inventory changes than Inventory sync can load/);
+});
+
 test('the result after sync leaves out changes with no delivery record and refuses failed ones', () => {
   const level = {available: 5, onHand: 6, committed: 1, checkedAt: 0};
   const waiting = readEvent(row(1, '77', {computedInventoryChange: -2}));

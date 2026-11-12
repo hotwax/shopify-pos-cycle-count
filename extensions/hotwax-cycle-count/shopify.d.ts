@@ -79,6 +79,14 @@ declare module './src/CountWorkspace.jsx' {
 }
 
 //@ts-ignore
+declare module './src/QuickCount.jsx' {
+  const shopify:
+    | import('@shopify/ui-extensions/pos.home.modal.render').Api
+    | import('@shopify/ui-extensions/pos.product-details.action.render').Api;
+  const globalThis: { shopify: typeof shopify };
+}
+
+//@ts-ignore
 declare module './src/count-navigation.js' {
   const shopify:
     | import('@shopify/ui-extensions/pos.home.modal.render').Api

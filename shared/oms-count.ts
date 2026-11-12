@@ -11,6 +11,7 @@ import { handleWorkflow } from "./oms-count-workflows";
 import {manageLease, leaseDevice, sessionLease} from './oms-count-lease';
 import {countingPreferences, matchCodes, countableProducts, catalogPage, productSearchDetails} from './oms-count-products';
 import {handleCountCreation} from './oms-count-create';
+import {handleQuickCount, variantProduct} from './oms-count-quick';
 import {AREAS, COUNT_TYPES} from './count-types';
 import { shopFacility } from "./oms-shop";
 import {
@@ -281,16 +282,11 @@ export async function handleCount(
     return manageLease(action,sessionId,ctx.username,leaseDevice(identity.deviceId),payload.lease as OmsRow|undefined,oms,action==='leaseRenew');
   }
   if (action === 'contextProduct') {
-    // HotWax stores the Shopify VARIANT id in ShopifyShopProduct.shopifyProductId.
     // Never resolve count identity through the Shopify product search API.
-    const variantId = exactNumeric(payload.variantId,'Shopify variant');
-    const mappings = rows(await oms.get(`/rest/s1/sob/shopify/shopProducts?${new URLSearchParams({shopId:ctx.shopId,shopifyProductId:variantId,pageSize:'2'})}`));
-    if (mappings.length !== 1 || text(mappings[0].shopId)!==ctx.shopId || !mappings[0].productId)
-      throw new OmsLookupError('This variant does not have one confirmed HotWax product mapping. Scan its barcode or use its OMS SKU.',409);
-    const productId = text(mappings[0].productId), {details,balances} = await productDetails([productId],ctx,oms);
+    const {productId,shopifyVariantId} = await variantProduct(payload.variantId,ctx,oms), {details,balances} = await productDetails([productId],ctx,oms);
     const product = details.get(productId);
     if (!product) throw new OmsLookupError('The mapped product is unavailable in HotWax.',404);
-    return {productId,shopifyVariantId:Number(variantId),title:text(product.productName||product.internalName||productId),sku:text(product.internalName),
+    return {productId,shopifyVariantId,title:text(product.productName||product.internalName||productId),sku:text(product.internalName),
       ...(ctx.canViewOnHand?{onHand:number(balances.get(productId)?.quantityOnHand)}:{})};
   }
   if(action==='products'){
@@ -300,6 +296,8 @@ export async function handleCount(
     return {items:[...(await productSearchDetails(ids,ctx.preferences,oms)).values()]};
   }
   if(action==='catalog'){const result=await catalogPage(payload,ctx.preferences,oms);return {...result,items:await withInventory(result.items,ctx,oms)};}
+  const quick=await handleQuickCount(identity,payload,ctx,oms,next=>handleCount(identity,next,oms,cache));
+  if(quick!==undefined)return quick;
   const creation=await handleCountCreation(identity,payload,ctx,oms);
   if(creation!==undefined)return creation;
   const workflow = await handleWorkflow(identity, payload, ctx, oms);

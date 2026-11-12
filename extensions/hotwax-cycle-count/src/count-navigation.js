@@ -48,6 +48,8 @@ export function readCountPage(url, state, owner) {
     fromSummary: state.fromSummary === true,
     name: typeof state.name === 'string' ? state.name : '',
     variantId,
+    // Opened after a product-page count was saved: show the session's list, not that one product.
+    ...(state.listed === true ? {listed: true} : {}),
     ...(tool ? {tool} : {}),
     ...(tool === 'issue' ? {issueId: state.issueId} : {}),
   };

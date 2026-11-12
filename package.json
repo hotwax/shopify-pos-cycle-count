@@ -14,6 +14,8 @@
     "deploy": "export SHOPIFY_FLAG_APP_CONFIG=${SHOPIFY_FLAG_APP_CONFIG:-shopify.app.toml}; node scripts/configure-oms.mjs --release && shopify app build && node scripts/check-bundle.mjs && shopify app deploy",
     "build:gorjana-sandbox": "SHOPIFY_FLAG_APP_CONFIG=gorjana-sandbox npm run build",
     "deploy:gorjana-sandbox": "SHOPIFY_FLAG_APP_CONFIG=gorjana-sandbox npm run deploy -- --config gorjana-sandbox",
+    "build:gorjana-prod": "SHOPIFY_FLAG_APP_CONFIG=gorjana-prod npm run build",
+    "deploy:gorjana-prod": "SHOPIFY_FLAG_APP_CONFIG=gorjana-prod npm run deploy -- --config gorjana-prod",
     "pretest": "node scripts/configure-oms.mjs --release --if-missing",
     "test": "node --import tsx --test tests/*.test.ts",
     "pretypecheck": "node scripts/configure-oms.mjs --release --if-missing",

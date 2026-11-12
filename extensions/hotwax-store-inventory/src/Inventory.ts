@@ -114,11 +114,11 @@ export function omsSession(first: string, login: () => Promise<string>, now: () 
 export async function inventoryLocation(scope: InventoryScope, getSessionToken: () => Promise<string | undefined>, signal: AbortSignal): Promise<Location> {
   const sessionToken = async () => {
     const token = await getSessionToken();
-    if (!token) throw new OmsLookupError('Your Shopify session is unavailable. Reopen Store inventory.', 401);
+    if (!token) throw new OmsLookupError('Your Shopify session is unavailable. Reopen Inventory sync.', 401);
     return token;
   };
   const token = await sessionToken();
-  if (signal.aborted) throw new OmsLookupError('Store inventory was closed while opening.', 401);
+  if (signal.aborted) throw new OmsLookupError('Inventory sync was closed while opening.', 401);
   // The shop's OMS address from its HotWax setup (App Home), the same setting Cycle count uses.
   configureDirectOms(await getShopOmsUrl(signal, LOCAL_OMS_PREVIEW), LOCAL_OMS_PREVIEW);
   const oms = new OmsConnection({shopifySessionToken:token,shopifyLocationId:scope.locationId,signal});
@@ -159,12 +159,97 @@ function ledgerQuery(location: Location, filter: EventFilter, itemId?: string): 
   };
 }
 
-async function ledgerPage(oms: OmsConnection, query: Record<string,string>, pageIndex: number, orderByField: string) {
-  const params = new URLSearchParams({...query,orderByField,pageSize:String(LEDGER_PAGE),pageIndex:String(pageIndex)});
-  const page = await oms.get<unknown>(LEDGER+'?'+params);
-  const entries = rows(page);
-  if (!Array.isArray(page) || entries.length!==page.length) throw new OmsLookupError('HotWax returned an incomplete inventory ledger.');
-  return entries;
+type LedgerPage = {entries: OmsRow[]; more: boolean};
+
+/** Locations whose OMS serves the ledger in the format from before shopify-connector v4.4.0. */
+const legacyLedgers = new WeakSet<Location>();
+
+async function ledgerPage(oms: OmsConnection, location: Location, query: Record<string,string>, pageIndex: number, orderByField: string): Promise<LedgerPage> {
+  if (!legacyLedgers.has(location)) {
+    const params = new URLSearchParams({...query,orderByField,pageSize:String(LEDGER_PAGE),pageIndex:String(pageIndex)});
+    const page = await oms.get<unknown>(LEDGER+'?'+params);
+    const entries = rows(page);
+    if (Array.isArray(page) && entries.length===page.length) return {entries,more:entries.length===LEDGER_PAGE};
+    if (!legacyDetails(page)) throw new OmsLookupError('HotWax returned an incomplete inventory ledger.');
+    legacyLedgers.add(location);
+  }
+  // The older ledger is filtered here, so its first page holds every matching row.
+  if (pageIndex>0) return {entries:[],more:false};
+  const entries = (await legacyLedger(location,query.eventTypeId)).filter(row=>matchesLedgerQuery(row,query));
+  const descending = orderByField.startsWith('-createdDate');
+  if (orderByField.replace(/^-/,'').startsWith('createdDate')) {
+    entries.sort((left,right)=>(Number(left.createdDate)-Number(right.createdDate))*(descending ? -1 : 1));
+  }
+  return {entries,more:false};
+}
+
+// Before shopify-connector v4.4.0 the ledger is a service returning {details, hasMore}, newest first. It
+// filters only by location and event type, and has no adjustment ids or reset levels: a reset row is
+// already a change. It loads the whole location on every page, so pages are large and one read serves
+// callers for a few seconds after it completes.
+const LEGACY_PAGE = 1000;
+const LEGACY_PAGES = 10;
+const LEGACY_REUSE_MS = 10*1000;
+const legacyReads = new WeakMap<Location,Map<string,{at: number; rows: Promise<OmsRow[]>}>>();
+
+function legacyDetails(page: unknown) {
+  if (!page || typeof page!=='object' || Array.isArray(page)) return null;
+  const {details,hasMore} = page as OmsRow;
+  const entries = rows(details);
+  return Array.isArray(details) && entries.length===details.length && typeof hasMore==='boolean' ? {entries,hasMore} : null;
+}
+
+function legacyLedger(location: Location, eventType?: string) {
+  const reads = legacyReads.get(location) ?? new Map<string,{at: number; rows: Promise<OmsRow[]>}>();
+  legacyReads.set(location,reads);
+  const key = eventType ?? '';
+  const cached = reads.get(key);
+  if (cached && Date.now()-cached.at<LEGACY_REUSE_MS) return cached.rows;
+  // In flight until it completes; reused for a few seconds after.
+  const read = {at:Infinity,rows:readLegacyLedger(location,eventType)};
+  reads.set(key,read);
+  read.rows.then(()=>{read.at = Date.now();},()=>{if (reads.get(key)===read) reads.delete(key);});
+  return read.rows;
+}
+
+async function readLegacyLedger(location: Location, eventType?: string) {
+  const found: OmsRow[] = [];
+  const seen = new Set<string>();
+  for (let index = 0; index < LEGACY_PAGES; index++) {
+    const params = new URLSearchParams({shopId:location.shopId,shopifyLocationId:location.locationId,
+      pageSize:String(LEGACY_PAGE),pageIndex:String(index),...(eventType ? {eventTypeId:eventType} : {})});
+    // Each page reloads the whole location on the OMS, so each gets its own time budget. Not tied to one
+    // screen's signal: another screen can be waiting on the same read.
+    const page = legacyDetails(await inventoryConnection(location).get<unknown>(LEDGER+'?'+params));
+    if (!page) throw new OmsLookupError('HotWax returned an incomplete inventory ledger.');
+    for (const row of page.entries) {
+      const event = [text(row.eventTypeId),text(row.eventReferenceId)].join(':');
+      const key = [event,text(row.shopifyInventoryItemId),text(row.createdDate)].join('|');
+      // Newer rows arriving between pages push older ones onto the next page again.
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const noChange = !row.systemMessageId && inventoryQuantity(row.computedInventoryChange)===0;
+      found.push({...row,shopifyInventoryAdjustmentId:'legacy:'+event,shopifyInventoryAdjustmentSeqId:text(row.shopifyInventoryItemId),
+        resetInventoryLevel:'N',...(noChange ? {systemMessageStatusId:'SmsgCancelled'} : {})});
+    }
+    if (!page.hasMore) return found;
+  }
+  throw new OmsLookupError('This store has more inventory changes than Inventory sync can load.');
+}
+
+/** The ledger query's filters applied to a row: equality, `_op=in` lists, `_not=Y` (which also matches an
+ * empty field, as Moqui's not-in does) and `_from` lower bounds. */
+function matchesLedgerQuery(row: OmsRow, query: Record<string,string>) {
+  return Object.entries(query).every(([key,value])=>{
+    if (key.endsWith('_op') || key.endsWith('_not')) return true;
+    if (key.endsWith('_from')) {
+      const found = inventoryQuantity(row[key.slice(0,-'_from'.length)]);
+      return found!==null && found>=Number(value);
+    }
+    const field = text(row[key]);
+    const matched = query[key+'_op']==='in' ? value.split(',').includes(field) : field===value;
+    return query[key+'_not']==='Y' ? !field || !matched : matched;
+  });
 }
 
 function inScope(row: OmsRow, location: Location, itemId?: string) {
@@ -177,10 +262,11 @@ function inScope(row: OmsRow, location: Location, itemId?: string) {
 export async function recentInventoryEvents(location: Location, signal: AbortSignal, filter: EventFilter = DEFAULT_FILTER, itemId?: string) {
   const oms = inventoryConnection(location,signal);
   const order = (filter.oldestFirst ? 'createdDate,' : '-createdDate,')+KEY_ORDER;
-  const page = await ledgerPage(oms,ledgerQuery(location,filter,itemId),0,order);
+  const {entries,more:next} = await ledgerPage(oms,location,ledgerQuery(location,filter,itemId),0,order);
+  const page = entries.slice(0,LEDGER_PAGE);
   let events = page.filter(row=>inScope(row,location,itemId)).map(readEvent);
   if (filter.status==='attention') events = events.filter(event=>event.state==='Error' || event.state==='Missing');
-  const more = page.length===LEDGER_PAGE;
+  const more = next || entries.length>LEDGER_PAGE;
   if (itemId) return {events,more};
   const products = await ledgerProducts(oms,location.shopId,events);
   return {events:events.map(event=>({...event,product:products.get(event.itemId)})),more};
@@ -191,7 +277,7 @@ async function* completeLedger(location: Location, signal: AbortSignal, query: R
   const seen = new Set<string>();
   for (let index = 0; ; index++) {
     // Key order keeps pages stable; a row seen twice means the ledger shifted between pages.
-    const entries = await ledgerPage(oms,query,index,KEY_ORDER);
+    const {entries,more} = await ledgerPage(oms,location,query,index,KEY_ORDER);
     for (const row of entries) {
       const event = readEvent(row);
       const key = JSON.stringify([row.shopifyInventoryAdjustmentId,row.shopifyInventoryAdjustmentSeqId]);
@@ -201,7 +287,7 @@ async function* completeLedger(location: Location, signal: AbortSignal, query: R
       seen.add(key);
       yield {row,event};
     }
-    if (entries.length<LEDGER_PAGE) return;
+    if (!more) return;
   }
 }
 
@@ -527,7 +613,9 @@ export function readEvent(row: OmsRow): InventoryEvent {
   const message = text(row.systemMessageId);
   const status = text(row.systemMessageStatusId);
   // A message older than 30 days is purged while its event row stays; its delivery is then unknown.
-  const state: EventState = !message ? 'Unbatched' : !status ? 'Missing' : STATES[status] ?? 'Queued';
+  // The older ledger marks a change of zero that was never batched as cancelled: nothing to send.
+  const state: EventState = !message ? (status==='SmsgCancelled' ? 'Cancelled' : 'Unbatched')
+    : !status ? 'Missing' : STATES[status] ?? 'Queued';
   return {
     id:[text(row.shopifyInventoryAdjustmentId),text(row.shopifyInventoryAdjustmentSeqId)].join(':'),
     itemId,reference,delta,at:Number(row.createdDate),eventType:text(row.eventTypeId),

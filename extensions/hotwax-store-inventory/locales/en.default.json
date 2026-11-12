@@ -1,5 +1,5 @@
 {
-  "name": "Store inventory",
-  "tile_heading": "Store inventory",
+  "name": "Inventory sync",
+  "tile_heading": "Inventory sync",
   "tile_subheading": "View the Shopify inventory queue"
 }

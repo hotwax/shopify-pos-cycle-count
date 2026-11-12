@@ -409,7 +409,7 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
     }
     (async()=>{
       if(page.kind==='work')return;
-      const variantId=page.variantId||shopify.product?.variantId;
+      const variantId=page.listed?undefined:page.variantId||shopify.product?.variantId;
       if(variantId&&!page.tool)try{const selected=await request('contextProduct',{variantId});if(own()){context.current=selected;setContextProduct(selected);}}catch(failure){if(own())setError(message(failure));}
       if(!own())return;
       if(page.kind==='session'){await loadSession(page.sessionId,page.name);return;}
