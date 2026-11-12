@@ -32,13 +32,16 @@ test('cancelled work never starts and a late native rejection is still observed'
   native.reject(new Error('late native failure'));await tick();
 });
 
-test('a count request deadline settles even when the native Shopify token bridge never responds',async()=>{
+test('a count request deadline settles even when the native Shopify token bridge never responds',{timeout:1000},async()=>{
+  // AbortSignal.timeout uses an unref'ed timer in Node. Keep the test process
+  // alive until the deadline is observed, just as the native host stays alive.
+  const keepAlive=setInterval(()=>{},1000);
   const originalFetch=globalThis.fetch;
   globalThis.fetch=(async()=>({ok:true,json:async()=>({data:{currentAppInstallation:{omsUrl:{type:'url',value:'https://oms.example.com'}}}})})) as any;
   (globalThis as any).shopify={session:{currentSession:{shopId:1,locationId:7},staffMember:{value:{id:42}},getSessionToken:never},
     connectivity:{current:{value:{internetConnected:'Connected'}}},storage:{set:async()=>{},get:async()=>undefined}};
   try {await assert.rejects(countRequest('catalog',{search:'M'},{timeoutMs:10}),/Timed out/);}
-  finally{globalThis.fetch=originalFetch;delete (globalThis as any).shopify;}
+  finally{clearInterval(keepAlive);globalThis.fetch=originalFetch;delete (globalThis as any).shopify;}
 });
 
 test('cancelled authentication cannot start a late OMS login or business write',async()=>{

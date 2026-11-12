@@ -68,7 +68,7 @@ export async function handleCountCreation(identity: CountIdentity,payload: OmsRo
   const existing=sessions.find(s=>text(s.inventoryCountImportId)===sessionId);
   if(existing&&text(existing.uploadedByUserLogin)!==ctx.username)throw new OmsLookupError('Session creation identity conflict.',409);
   if(!existing)await oms.mutate(`${BASE}/workEfforts/${encodeURIComponent(id)}/sessions`,{inventoryCountImportId:sessionId,workEffortId:id,countImportName:name,facilityAreaId:'register',statusId:'SESSION_CREATED',uploadedByUserLogin:ctx.username,createdDate:Date.now()});
-  const present=new Set((await sessionRows(sessionId,oms)).map(row=>text(row.productId))),missing=ids.filter(productId=>!present.has(productId));
+  const present=new Set((await sessionRows(sessionId,ctx,oms)).map(row=>text(row.productId))),missing=ids.filter(productId=>!present.has(productId));
   for(let i=0;i<Math.min(missing.length,1000);i+=250)await oms.mutate(`${resource(sessionId)}/items`,{items:missing.slice(i,i+250).map(productId=>({uuid:`${sessionId}:${productId}`,productId,productIdentifier:products.get(productId)!.sku,isRequested:'Y',createdByUserLoginId:ctx.username,createdDate:Date.now()}))},'PUT');
   return {workEffortId:id,sessionId,preparing:missing.length>1000,remaining:Math.max(0,missing.length-1000)};
 }

@@ -5,10 +5,12 @@ A native Shopify POS extension for store cycle counting, with a Shopify-hosted A
 ## Counting flow
 
 - Create a **dynamic**, **directed**, or **hard** count, with optional start and due dates. Dynamic counts include the products staff choose to count; each included product must represent its full store quantity across sessions. Directed counts use a selected scope; hard counts cover the facility scope.
-- Use the count summary to review team progress, start a session, or continue an existing session. Product lists show all, uncounted and counted products; directed counts also distinguish extras.
-- Count with a connected POS scanner, the camera, an explicitly enabled HID input, or hand counting. Hand counting supports inline quantities and a review step before saving scan events.
+- Start an unscheduled Dynamic count directly from its name. Count type and dates sit under **Count options**. **Resume counting** opens the operator's session directly when there is exactly one eligible session; team/session selection remains available when needed.
+- Count with a connected POS scanner, the camera, an explicitly enabled HID input, or **Enter quantities**. Quantity entry keeps Review and Add in the native header; product names lead and SKU/variant details are secondary.
 - Inspect scan events in fixed newest-first order, filter unmatched scans, retry or correct matching, and undo individual events. Product sorting does not change event chronology.
-- Submit each session, resolve remaining uncounted products through counting or reviewed **Mark as out of stock** selection, then submit the count for OMS approval. A bulk zero confirmation uses one session even when its requests span multiple batches.
+- **Finish count** shows the total and one confirmation. When all products and other sessions are ready, **Send for approval** submits the session and count together. Otherwise **Finish my session** saves the operator's part and returns to the team summary. Resolve remaining products through counting or reviewed **Mark as out of stock** selection; a bulk zero confirmation uses one session across multiple batches.
+
+Submission reads the current status before writing. If a response is lost, it checks status again without automatically repeating the write. An unresolved outcome keeps the saved quantities and offers **Check and retry**; an already-submitted session or count skips its write. Submission status and quantity checks do not reload product display or inventory enrichment.
 
 Submitting a count sends it for review. This app does not approve or apply inventory adjustments. Discarding extra products records a `SKIPPED` review decision for those products only.
 
@@ -98,9 +100,68 @@ npm run deploy -- --version <release-name> --message '<release-summary>'
 
 `shared/oms-build-config.ts` is generated and gitignored: `npm run build` and `npm run deploy` write it with development flags disabled, `npm run dev` writes preview flags, and tests or typechecks only create it when it is missing. Always build and deploy through the npm scripts; running `shopify app build` or `shopify app deploy` directly ships whatever flags are on disk. Building alone does not release an app. See [Shopify app deploy](https://shopify.dev/docs/api/shopify-cli/app/app-deploy) for the release command. Stop the development preview before checking an installed release; an already-open POS extension may need POS to be relaunched to load the released bundle.
 
-The initial implementation has been deployed to a demo store and opened on a physical iPad with the local development server stopped. The current local regression suite contains 98 passing tests. Builds fail if an extension bundle comes within 512 bytes of Shopify's 64 KB compressed limit (`scripts/check-bundle.mjs`). Raw device captures, local test readbacks, historical implementation notes and machine-specific tool configuration are deliberately excluded from this repository.
+The initial implementation has been deployed to a demo store and opened on a physical iPad with the local development server stopped. The current local regression suite contains 123 passing tests. Builds fail if an extension bundle comes within 512 bytes of Shopify's 64 KB compressed limit (`scripts/check-bundle.mjs`). Raw device captures, local test readbacks, historical implementation notes and machine-specific tool configuration are deliberately excluded from this repository.
 
 ## Customer rollout boundaries
+
+### Gorjana sandbox
+
+`shopify.app.gorjana-sandbox.toml` identifies the separate **Gorjana Cycle Count Sandbox** app
+(`41bb8b2042d05ae284cbc6c68b54ce04`). Its custom distribution is restricted to
+`gorjana-sandbox.myshopify.com`; use `https://gorjana-maarg-uat.hotwax.io` in App Home.
+The default `shopify.app.toml` still identifies the original HotWax app.
+
+Use the named scripts so both build and deployment select the same sandbox configuration:
+
+```sh
+npm run build:gorjana-sandbox
+npm run deploy:gorjana-sandbox -- --version <release-name> --message '<release-summary>'
+```
+
+The UAT integration shop is `10000`. A legacy `HC_CUSTOM_APP` record shares its domain,
+so lookup selects the uniquely enabled integration and rejects ambiguous enabled records.
+Location mappings must also resolve uniquely; do not substitute a different facility when they do not.
+
+UAT registers the POS app through a dedicated `GORJANA_CC_SANDBOX` remote linked with
+purpose `SsctCycleCountPosApp`, separate from the existing default integration remote.
+Only its client identity and signature-verification secret are needed for sign-in;
+do not embed the secret in this repository or give this remote an outbound Shopify token.
+UAT also requires the `DYNAMIC_COUNT` reference value from `docs/oms/DynamicCountData.xml`.
+
+The bundle gate measures Brotli quality 11, matching Shopify CLI 4.9.4, and retains
+the 512-byte margin below 64 KB. Shopify's deployment validation is the final size check.
+
+Sandbox validation on 2026-10-29 finished on installed release
+[`gorjana-sandbox-2026-10-29-r6`](https://dev.shopify.com/dashboard/129669934/apps/441352650753/versions/1186266677249)
+on a physical iPad running Shopify POS 11.17.1. The simplified Create count flow
+opened its first session directly. A pending one-product/three-unit quantity draft
+survived a POS restart and release refresh, and Review restored the full product
+name. The final **Finish count → Send for approval** flow submitted both the
+session and whole count, returning directly to the approval summary.
+
+Live UAT readback for `POSC_45a80ddef9acbdb` confirmed `CYCLE_CNT_CMPLTD`, session
+`POSI_45a80ddef9acbdb` `SESSION_SUBMITTED`, one product with quantity 3 and
+`approvedDate: null`. No approval or inventory adjustment was performed.
+The r6 POS bundle is 57,371 bytes Brotli-compressed; App Home is 9,060 bytes.
+123 local regression tests, shared TypeScript, Shopify configuration and changed
+2026-07 POS component validation pass.
+
+The earlier device submission entered **Checking submission** and then **Check
+and retry** while retaining its saved quantities. Investigation measured the
+legacy session-item endpoint at 17.8–18.3 seconds because it joins inventory.
+Submission now uses the existing session count aggregate (1.4 seconds in the live
+probe); session reopening has a bounded 25-second allowance for the legacy read.
+The final device submission completed successfully. Lost-response success and
+already-submitted write skipping are covered by local regression tests; no
+artificial network fault was injected on the iPad.
+
+This is a sandbox smoke test, not production acceptance. Legacy session loading
+can still be slow. Physical scanner, physical network interruption/reboot,
+multi-terminal, restricted-staff and VoiceOver scenarios remain unverified.
+App Home rendered and saved configuration on the iPad; desktop Chrome automation
+previously displayed a blank App Home and was not retested in this UX pass.
+
+### Acceptance
 
 - The app verifies lease ownership/generation before writes. Atomic ownership, expiry and count-completion fencing must also be enforced by OMS to protect against concurrent or legacy clients.
 - A PIN-only operator must not inherit the logged-in account's OMS authority. The existing login contract requires matching authenticated identities; broader staff delegation needs corresponding server authorization.

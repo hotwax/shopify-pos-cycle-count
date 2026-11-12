@@ -1,14 +1,11 @@
 import {sessionLease,activeSessionLease,describe as describeLease,leaseDevice} from './oms-count-lease';
-import {COUNT_TYPES} from './count-types';
+import {AREAS, COUNT_TYPES} from './count-types';
 import {OmsConnection, OmsLookupError, rows, text, requireCountConnection, type OmsRow} from './oms-connection';
 import {BASE, EDITABLE, countWork, countDetail, sessionRows, productDetails, validId, resource, number, type Context, type CountIdentity, canPreviewCount, requirePreview, ownedCount, withCountLock} from './oms-count';
 
-export const AREAS = [
-  {id: 'back_stock', name: 'Back stock'}, {id: 'display', name: 'Display'},
-  {id: 'floor_wall', name: 'Floor wall'}, {id: 'floor_shelf', name: 'Floor shelf'},
-  {id: 'overflow', name: 'Overflow'}, {id: 'register', name: 'Register'},
-];
+export {AREAS};
 const workPath = (id: string) => `${BASE}/workEfforts/${validId(id)}`;
+const discardable = (status: unknown) => status === 'CYCLE_CNT_CREATED' || status === 'CYCLE_CNT_IN_PRGS';
 function page(value: unknown) {
   const index = Number(value ?? 0);
   if (!Number.isSafeInteger(index) || index < 0 || index > 10000) throw new OmsLookupError('Invalid page.', 400);
@@ -39,16 +36,55 @@ async function overview(id: string, ctx: Context, oms: OmsConnection) {
   const work = await countWork(id, ctx, oms), sessions = await countSessions(id, oms);
   return {...summary(work), sessions: sessions.map(s => sessionSummary(s, ctx, work)), areas: AREAS,
     canCreateSession: text(work.statusId) === 'CYCLE_CNT_IN_PRGS', canComplete: ctx.canSubmit, canPreview:canPreviewCount(work,ctx),
+    canDiscard: ctx.canDiscard && discardable(work.statusId),
     canStart: text(work.statusId) === 'CYCLE_CNT_CREATED' && (Number(work.estimatedStartDate || 0) <= Date.now() || ctx.canPrestart)};
 }
-async function reviewRows(id: string, oms: OmsConnection) {
+export async function reviewRows(id: string, oms: OmsConnection, productId?: string) {
   const result: OmsRow[] = [];
-  for (let index = 0; true; index++) {
-    const found = rows(await oms.get(`${workPath(id)}/reviews?${new URLSearchParams({pageSize:'500',pageIndex:String(index),orderByField:'productId'})}`));
+  for (let index = 0; index <= 10000; index++) {
+    const params = new URLSearchParams({pageSize:'500',pageIndex:String(index),orderByField:'productId'});
+    if (productId) params.set('productId',productId);
+    const page = await oms.get<unknown>(`${workPath(id)}/reviews?${params}`);
+    const found = rows(page);
+    if (!Array.isArray(page) || found.length!==page.length) throw new OmsLookupError('HotWax returned incomplete count reviews.');
     result.push(...found);
     if (found.length < 500) return result;
   }
   throw new OmsLookupError('Count progress could not be fully loaded.');
+}
+// Ionic recomputes a product's total from /count session contributions after an
+// edit. Use those totals on every POS review: /reviews also joins prices and
+// stores before SUM(quantity), which can multiply a saved quantity.
+export async function countContributions(id: string, oms: OmsConnection) {
+  const result: OmsRow[] = [];
+  for (let index = 0; index <= 10000; index++) {
+    const found = await oms.get(`${workPath(id)}/count?${new URLSearchParams({pageSize:'500',pageIndex:String(index),orderByField:'productId,inventoryCountImportId'})}`);
+    if (!Array.isArray(found) || rows(found).length !== found.length) throw new OmsLookupError('Session totals could not be loaded. Refresh the count.');
+    result.push(...rows(found));
+    if (found.length < 500) return result;
+  }
+  throw new OmsLookupError('Session totals could not be fully loaded.');
+}
+export function reconcileReviewTotals(reviewed: OmsRow[], contributions: OmsRow[]) {
+  const combined = new Map<string,OmsRow & {quantity:number|null;numberOfSessions:number}>(reviewed.map(row => [text(row.productId), {...row,quantity:null,numberOfSessions:0}]));
+  const seen = new Set<string>();
+  for (const row of contributions) {
+    if (text(row.statusId) === 'SESSION_VOIDED') continue;
+    const productId=text(row.productId), sessionId=text(row.inventoryCountImportId), key=JSON.stringify([sessionId,productId]);
+    const item=combined.get(productId), quantity=number(row.counted);
+    // A partial/moving page must never become a plausible total or silently
+    // count the same session twice. Keep completion unavailable until refreshed.
+    if (!item || !productId || !sessionId || seen.has(key) || (row.counted != null && quantity === null))
+      throw new OmsLookupError('Session totals changed or are incomplete. Refresh the count.');
+    seen.add(key);
+    if (quantity !== null) item.quantity=(item.quantity ?? 0)+quantity;
+    item.numberOfSessions++;
+    item.maxLastUpdatedAt=Math.max(Number(item.maxLastUpdatedAt||0),Number(row.lastUpdatedAt||0));
+  }
+  if (reviewed.some(row=>!combined.get(text(row.productId))?.numberOfSessions ||
+      (number(row.numberOfSessions)!==null && Number(row.numberOfSessions)!==combined.get(text(row.productId))!.numberOfSessions)))
+    throw new OmsLookupError('Session totals changed or are incomplete. Refresh the count.');
+  return combined;
 }
 const FACILITY_PAGE = 500, FACILITY_WINDOW = 4;
 export async function facilityProducts(ctx: Pick<Context,'facilityId'>, oms: OmsConnection) {
@@ -73,14 +109,14 @@ export async function facilityProducts(ctx: Pick<Context,'facilityId'>, oms: Oms
 }
 export async function countProgress(id: string, ctx: Context, oms: OmsConnection, hydrate = true) {
   const work=await countWork(id,ctx,oms);requirePreview(work,ctx);
-  const [info, reviewed] = await Promise.all([overview(id, ctx, oms), reviewRows(id, oms)]);
-  const combined = new Map(reviewed.map(row => [text(row.productId), row]));
+  const [info, reviewed, contributions] = await Promise.all([overview(id, ctx, oms), reviewRows(id, oms), countContributions(id, oms)]);
+  const combined: Map<string,OmsRow> = reconcileReviewTotals(reviewed, contributions);
   if (info.type === 'HARD_COUNT') for (const [productId, item] of await facilityProducts(ctx, oms)) {
     if (!combined.has(productId)) combined.set(productId, {productId,quantity:null,isRequested:'Y',quantityOnHand:item.quantityOnHandTotal});
   }
   const {details} = hydrate ? await productDetails([...combined.keys()], {...ctx, canViewOnHand:false}, oms) : {details:new Map<string,OmsRow>()};
   const items = [...combined].map(([productId, row]) => ({...details.get(productId)?.presentation as object, productId,
-    title:text(details.get(productId)?.productName || details.get(productId)?.internalName || row.internalName || productId),
+    title:text((details.get(productId)?.presentation as OmsRow|undefined)?.title || details.get(productId)?.productName || details.get(productId)?.internalName || row.internalName || productId),
     sku:text(details.get(productId)?.internalName || row.internalName || productId), quantity:number(row.quantity),
     lastUpdatedAt:Number(row.maxLastUpdatedAt || 0),
     isRequested: info.type === 'HARD_COUNT' || text(row.isRequested) !== 'N',
@@ -110,13 +146,13 @@ async function createSession(id: string, payload: OmsRow, ctx: Context, oms: Oms
   const source = sessions.find(s=>text(s.inventoryCountImportId)!==sessionId && text(s.statusId)!=='SESSION_VOIDED');
   if (directed && !source) throw new OmsLookupError('This directed count has no requested product list. Add its scope in HotWax first.');
   const requested: OmsRow[]=[];
-  if(directed)for(const seed of sessions.filter(s=>text(s.inventoryCountImportId)!==sessionId&&text(s.statusId)!=='SESSION_VOIDED'))requested.push(...(await sessionRows(text(seed.inventoryCountImportId),oms)).filter(row=>text(row.isRequested)!=='N'));
+  if(directed)for(const seed of sessions.filter(s=>text(s.inventoryCountImportId)!==sessionId&&text(s.statusId)!=='SESSION_VOIDED'))requested.push(...(await sessionRows(text(seed.inventoryCountImportId),ctx,oms)).filter(row=>text(row.isRequested)!=='N'));
   const scope = new Map(requested.map(row=>[text(row.productId),row]));
   if (directed && !scope.size) throw new OmsLookupError('The directed product list is empty. Check its scope in HotWax.');
   if (!existing) await oms.mutate(`${workPath(id)}/sessions`, {inventoryCountImportId:sessionId,workEffortId:id,countImportName:name,
     statusId:'SESSION_CREATED',uploadedByUserLogin:ctx.username,createdDate:Date.now(),facilityAreaId:payload.area});
   if (directed) {
-    const present = new Set((await sessionRows(sessionId,oms)).map(row=>text(row.productId)));
+    const present = new Set((await sessionRows(sessionId,ctx,oms)).map(row=>text(row.productId)));
     const missing = [...scope].filter(([productId])=>!present.has(productId));
     // At most 1,000 seeds per request keeps work within the native operation deadline.
     for (let offset=0;offset<Math.min(missing.length,1000);offset+=250) await oms.mutate(`${resource(sessionId)}/items`, {items:missing.slice(offset,offset+250).map(([productId,row])=>({
@@ -129,6 +165,10 @@ async function createSession(id: string, payload: OmsRow, ctx: Context, oms: Oms
 
 export async function handleWorkflow(identity: CountIdentity, payload: OmsRow, ctx: Context, oms: OmsConnection): Promise<unknown> {
   const action=text(payload.action), id=text(payload.workEffortId);
+  if(action==='countSubmissionStatus'){
+    const work=await countWork(id,ctx,oms);requirePreview(work,ctx);
+    return {workEffortId:id,statusId:text(work.statusId)};
+  }
   if (action==='storeCounts') {
     const pageIndex=page(payload.pageIndex), group=text(payload.group)||'active';
     const statusId = {active:'CYCLE_CNT_CREATED,CYCLE_CNT_IN_PRGS',submitted:'CYCLE_CNT_CMPLTD',history:'CYCLE_CNT_CLOSED,CYCLE_CNT_CNCL'}[group];
@@ -155,7 +195,7 @@ export async function handleWorkflow(identity: CountIdentity, payload: OmsRow, c
     const locks=rows(result.entityValueList),device=leaseDevice(identity.deviceId);
     return {items:ids.map(sessionId=>({sessionId,...describeLease(activeSessionLease(locks.filter(row=>text(row.inventoryCountImportId)===sessionId)),ctx.username,device)}))};
   }
-  if (action==='progress') return countProgress(id,ctx,oms);
+  if (action==='progress') return countProgress(id,ctx,oms,payload.compact!==true);
   if (action==='contributions') {
     requirePreview(await countWork(id,ctx,oms),ctx);
     const productId=text(payload.productId);validId(productId);
@@ -173,12 +213,12 @@ export async function handleWorkflow(identity: CountIdentity, payload: OmsRow, c
     const edit=async()=>{
       const latest=await ownedCount(sessionId,ctx,oms,true);
       if(!['SESSION_CREATED','SESSION_ASSIGNED','SESSION_SUBMITTED'].includes(text(latest.session.statusId)))throw new OmsLookupError('This session is no longer editable.',409);
-      const records=await sessionRows(sessionId,oms,productId);
+      const records=await sessionRows(sessionId,ctx,oms,productId);
       const current=records.some(r=>number(r.quantity)!==null)?records.reduce((sum,r)=>sum+(number(r.quantity)||0),0):null;
       if(!records.length||(current!==number(payload.expectedQuantity)&&current!==quantity))throw new OmsLookupError('This contribution changed. Refresh the team total before editing.',409);
       if(records.some(r=>!r.uuid))throw new OmsLookupError('This session has legacy rows without unique IDs. Reopen it in HotWax before editing.',409);
       await oms.mutate(`${resource(sessionId)}/items`,{items:records.map((r,i)=>({uuid:r.uuid,productId,quantity:i===0?quantity:0,countedByUserLoginId:ctx.username}))},'PUT');
-      const saved=await sessionRows(sessionId,oms,productId);
+      const saved=await sessionRows(sessionId,ctx,oms,productId);
       if(saved.reduce((sum,r)=>sum+(number(r.quantity)||0),0)!==quantity)throw new OmsLookupError('HotWax did not confirm the updated contribution. Refresh before retrying.',409);
       return {saved:true};
     };
@@ -190,7 +230,7 @@ export async function handleWorkflow(identity: CountIdentity, payload: OmsRow, c
     }
     return withCountLock(sessionId,ctx,oms,edit,undefined,identity.deviceId);
   }
-  if (!['createSession','startCount','completeCount','confirmZero','discardUndirected'].includes(action)) return undefined;
+  if (!['createSession','startCount','completeCount','discardCount','confirmZero','discardUndirected'].includes(action)) return undefined;
   requireCountConnection(identity.shop);
   if (action==='createSession') return createSession(id,payload,ctx,oms);
   const work=await countWork(id,ctx,oms);
@@ -199,6 +239,29 @@ export async function handleWorkflow(identity: CountIdentity, payload: OmsRow, c
     if(text(work.statusId)!=='CYCLE_CNT_CREATED' || (Number(work.estimatedStartDate || 0)>Date.now() && !ctx.canPrestart)) throw new OmsLookupError('This scheduled count cannot be started yet.',403);
     await oms.mutate(workPath(id),{statusId:'CYCLE_CNT_IN_PRGS',actualStartDate:Date.now()},'PUT');
     return overview(id,ctx,oms);
+  }
+  if (action==='discardCount') {
+    if (!ctx.canDiscard) throw new OmsLookupError('Your OMS account cannot discard cycle counts.',403);
+    if (work.statusId==='CYCLE_CNT_CNCL') return overview(id,ctx,oms);
+    if (!discardable(work.statusId)) throw new OmsLookupError('Only open counts can be discarded.',409);
+    const sessions=await countSessions(id,oms);
+    if (sessions.some(session=>session.statusId==='SESSION_APPROVED'))
+      throw new OmsLookupError('An approved session cannot be discarded.',409);
+    const pending=sessions.filter(session=>session.statusId!=='SESSION_VOIDED');
+    // Match Inventory Count's two existing work-effort updates. A retry
+    // skips session voids that were already confirmed before interruption.
+    if (pending.length) await oms.mutate(workPath(id),{workEffortId:id,InventoryCountImport:pending.map(session=>({
+      inventoryCountImportId:text(session.inventoryCountImportId),statusId:'SESSION_VOIDED',
+    }))},'PUT');
+    if ((await countSessions(id,oms)).some(session=>session.statusId!=='SESSION_VOIDED'))
+      throw new OmsLookupError('Some sessions are still open. Check the count and retry discard.',409);
+    const fresh=await countWork(id,ctx,oms);
+    if (fresh.statusId==='CYCLE_CNT_CNCL') return overview(id,ctx,oms);
+    if (!discardable(fresh.statusId)) throw new OmsLookupError('The count changed. Refresh it before discarding.',409);
+    await oms.mutate(workPath(id),{workEffortId:id,statusId:'CYCLE_CNT_CNCL'},'PUT');
+    const result=await overview(id,ctx,oms);
+    if (result.statusId!=='CYCLE_CNT_CNCL') throw new OmsLookupError('HotWax could not confirm the discard. Check and retry.',409);
+    return result;
   }
   if(!ctx.canSubmit) throw new OmsLookupError('Your OMS account cannot manage count completion.',403);
   if(action==='completeCount' && text(work.statusId)==='CYCLE_CNT_CMPLTD') return overview(id,ctx,oms);
@@ -224,7 +287,7 @@ export async function handleWorkflow(identity: CountIdentity, payload: OmsRow, c
     // product counted meanwhile by another operator.
     const prior=await countSessions(id,oms), existing=prior.find(s=>text(s.inventoryCountImportId)===sessionId);
     if(existing && text(existing.uploadedByUserLogin)!==ctx.username) throw new OmsLookupError('Zero confirmation identity conflict.',409);
-    const already=existing ? await sessionRows(sessionId,oms) : [];
+    const already=existing ? await sessionRows(sessionId,ctx,oms) : [];
     if(items.some(i=>!i!.isRequested || (i!.quantity!==null && !(i!.quantity===0 && already.some(row=>text(row.productId)===i!.productId)))))
       throw new OmsLookupError('A selected product has already been counted. Refresh progress.',409);
     if(!existing) await oms.mutate(`${workPath(id)}/sessions`,{inventoryCountImportId:sessionId,workEffortId:id,countImportName:'Confirmed zero in POS',statusId:'SESSION_SUBMITTED',uploadedByUserLogin:ctx.username,createdDate:Date.now(),facilityAreaId:'register'});

@@ -95,7 +95,7 @@ export async function syncBackground({native,owner,request,isCurrent=()=>true,co
       if(error?.leaseLost&&mailbox){delete mailbox.leases[current.sessionId];
         if(used?.fromDate!=null)mailbox.released[current.sessionId]=used.fromDate;changed=true;}
     }
-    if(isCurrent()&&mailbox)post({state:'attention',message:error instanceof Error?error.message:'Open Cycle Count to resume syncing.'});
+    if(isCurrent()&&mailbox)post({state:'attention',message:error instanceof Error?error.message:'Open Cycle count to resume syncing.'});
     return pending;
   } finally {
     // Receipts are kept even if the PIN changed after the server accepted the batch.

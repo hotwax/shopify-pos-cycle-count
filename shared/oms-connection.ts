@@ -100,7 +100,10 @@ export class OmsConnection {
         this.reads.clear();
       }
       const budget = this.started + 48000 - this.clock();
-      const signals = [AbortSignal.timeout(Math.max(1, Math.min(mutation ? 25000 : 12000, mutation ? budget : remaining)))];
+      // The legacy session-item endpoint aggregates inventory as well as count
+      // rows. Reads are facility-scoped; retain a bounded allowance for slow instances.
+      const sessionItems = !mutation && /^\/rest\/s1\/inventory-cycle-count\/cycleCounts\/sessions\/[^/]+\/items\?/.test(path);
+      const signals = [AbortSignal.timeout(Math.max(1, Math.min(mutation || sessionItems ? 25000 : 12000, mutation ? budget : remaining)))];
       if (!this.writeStarted && this.identity.signal) signals.push(this.identity.signal);
       const response = await fetch(`${this.origin}${path}`, {
         ...init, redirect: "manual", signal: AbortSignal.any(signals),
@@ -155,7 +158,9 @@ export class OmsConnection {
   }
 
   async postRead(path: string, body: OmsRow): Promise<OmsRow> {
-    if (!['/rest/s1/admin/search/query', '/rest/s1/shopify/graphql', '/rest/s1/oms/dataDocumentView'].includes(path) ||
+    if (!['/rest/s1/admin/search/query', '/rest/s1/graphql', '/rest/s1/shopify/graphql', '/rest/s1/oms/dataDocumentView'].includes(path) ||
+        (path === '/rest/s1/graphql' && (typeof body.query !== 'string' || !/^\s*query\b/.test(body.query) ||
+          /\b(mutation|subscription)\b/.test(body.query) || 'operationName' in body)) ||
         (path === '/rest/s1/oms/dataDocumentView' && !['ProductFacilityAndInventoryItem','InventoryCountImportLock'].includes(text(body.dataDocumentId))) ||
         (path === '/rest/s1/shopify/graphql' && (!/^\s*query\b/.test(text(body.queryText)) ||
           /\b(mutation|subscription)\b/.test(text(body.queryText)) || 'operationName' in body))) {
@@ -165,6 +170,14 @@ export class OmsConnection {
     return await this.request(path, {method: "POST",
       headers: {Authorization: `Bearer ${token}`, "Content-Type": "application/json"}, body: JSON.stringify(body),
     }) as OmsRow;
+  }
+
+  async graphqlRead<Data>(query: string, variables: OmsRow): Promise<Data> {
+    const result = await this.postRead('/rest/s1/graphql',{query,variables});
+    if (!result.data || (Array.isArray(result.errors) && result.errors.length)) {
+      throw new OmsLookupError('HotWax could not read the requested data.');
+    }
+    return result.data as Data;
   }
 
   async mutate(path: string, body: OmsRow, method: 'POST' | 'PUT' = 'POST'): Promise<OmsRow> {

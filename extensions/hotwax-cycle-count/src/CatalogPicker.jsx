@@ -1,5 +1,5 @@
 import {useEffect,useRef,useState} from 'preact/hooks';
-import {ActionRow,BackButton} from './FlowParts.jsx';
+import {ActionRow,BackButton,DividedRows,productDetail} from './FlowParts.jsx';
 import {CompactPager} from './ProductList.jsx';
 
 export function CatalogPicker({request,onPick,selected,scope=false,disabled=false,allowedIds,onSelectAll,renderProduct,memory}) {
@@ -45,12 +45,12 @@ export function CatalogPicker({request,onPick,selected,scope=false,disabled=fals
     <BackButton loading={loading} onClick={()=>setShowTags(false)}>Products</BackButton><s-text type="strong">Filter by tags</s-text>
     <s-text-field label="Find a tag" value={tagSearch} onInput={e=>{setTagSearch(e.currentTarget.value);setTagPage(0);}}/>
     {error&&<s-banner tone="critical" heading={error}/>}
-    {tagMatches.slice(tagPage*40,(tagPage+1)*40).map(t=><ActionRow key={t.value} title={t.value} meta={tags.includes(t.value)?'Selected':String(t.count)} onClick={()=>{setTags(old=>old.includes(t.value)?old.filter(v=>v!==t.value):[...old,t.value]);setPage(0);}}/>)}
+    <DividedRows>{tagMatches.slice(tagPage*40,(tagPage+1)*40).map(t=><ActionRow key={t.value} title={t.value} meta={tags.includes(t.value)?'Selected':String(t.count)} onClick={()=>{setTags(old=>old.includes(t.value)?old.filter(v=>v!==t.value):[...old,t.value]);setPage(0);}}/>)}</DividedRows>
     <CompactPager page={tagPage} pages={Math.max(1,Math.ceil(tagMatches.length/40))} total={tagMatches.length} label="tags" onPage={setTagPage}/>
     <s-button variant="primary" onClick={()=>setShowTags(false)}>Show products</s-button>
   </s-stack>;
   return <s-stack direction="block" gap="base">
-    <s-text-field label="Find an OMS product" placeholder="Product name, SKU or UPC" value={input} disabled={disabled||collecting} onInput={e=>setInput(e.currentTarget.value)}/>
+    <s-text-field label="Find a product" placeholder="Product name, SKU or UPC" value={input} disabled={disabled||collecting} onInput={e=>setInput(e.currentTarget.value)}/>
     {scope&&<s-stack direction="inline" gap="base"><s-button disabled={collecting} onClick={openTags}>{tags.length?`${tags.length} tags selected`:'Filter by tags'}</s-button>{tags.length>0&&<s-button onClick={()=>{setTags([]);setPage(0);}}>Clear tags</s-button>}</s-stack>}
     {selected&&<s-stack direction="inline" gap="base"><s-button disabled={collecting} onClick={()=>{setSelectedOnly(v=>!v);setPage(0);}}>{selectedOnly?'Search results':`Selected (${selected.size})`}</s-button>{onSelectAll&&result?.total>0&&!selectedOnly&&<s-button disabled={disabled||loading||collecting} onClick={selectAll}>Select all {result.total} matches</s-button>}</s-stack>}
     {error&&<s-banner tone="critical" heading={error}/>}
@@ -58,9 +58,9 @@ export function CatalogPicker({request,onPick,selected,scope=false,disabled=fals
       <s-text color="subdued">{collecting?'Selecting matching products…':loading?'Finding products…':selectedOnly?`${selectedItems.length} selected products`:result?`${result.total} matching products`:`Search by name or identifier${scope?', or choose a tag':''} to find products.`}</s-text>
       <s-box inlineSize="32px" blockSize="32px">{(loading||collecting)&&<s-spinner accessibilityLabel={collecting?'Selecting products':'Finding products'}/>}</s-box>
     </s-stack>
-    {products.map(product=>renderProduct?renderProduct(product,disabled||loading||collecting||!!allowedIds&&!allowedIds.has(product.productId)):<ActionRow key={product.productId} title={product.primary||product.title} detail={`${product.title} · ${product.secondary||product.sku}`} imageUrl={product.imageUrl}
+    <DividedRows>{products.map(product=>renderProduct?renderProduct(product,disabled||loading||collecting||!!allowedIds&&!allowedIds.has(product.productId)):<ActionRow key={product.productId} title={product.title||product.primary} detail={productDetail(product.title||product.primary,[product.primary,product.secondary||product.sku])} imageUrl={product.imageUrl} thumbnail
       meta={selected?.has(product.productId)?'Selected':allowedIds&&!allowedIds.has(product.productId)?'Not requested':undefined}
-      disabled={disabled||loading||collecting||!!allowedIds&&!allowedIds.has(product.productId)} onClick={()=>onPick(product)}/>)}
+      disabled={disabled||loading||collecting||!!allowedIds&&!allowedIds.has(product.productId)} onClick={()=>onPick(product)}/>)}</DividedRows>
     {selectedOnly?<CompactPager page={page} pages={Math.max(1,Math.ceil(selectedItems.length/40))} total={selectedItems.length} onPage={setPage}/>:result&&<CompactPager page={page} pages={Math.max(1,Math.ceil(result.total/40))} total={result.total} onPage={setPage} disabled={disabled||loading||collecting}/>}
   </s-stack>;
 }

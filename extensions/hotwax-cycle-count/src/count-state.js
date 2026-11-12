@@ -299,6 +299,19 @@ export class CountState {
     this.assertCanCount();
     const code = String(job.code || '').trim();
     if (!code || code.length > 255 || /[\x00-\x1f]/.test(code)) throw new Error('Enter a valid barcode or SKU.');
+    if(job.adjustment!==undefined){
+      if(job.source!=='correction'||![1,-1].includes(job.adjustment)||!this.items.items[job.productId])throw new Error('Choose a product in this session.');
+      const item=this.items.items[job.productId];
+      let quantity=item.quantity??0;
+      // Resolve a step against the durable journal, including scans or other
+      // taps which have been saved but have not reached the aggregate yet.
+      for(const event of events.events){
+        if(event.aggApplied!==0||this.items.applied[event.id]||event.id<(item.lastCorrectionId||0))continue;
+        const productId=event.productId||this.codes.get(event.scannedValue.toLowerCase());
+        if(productId===job.productId)quantity=event.mode==='set'?event.quantity:quantity+event.quantity;
+      }
+      job={...job,quantity:quantity+job.adjustment};
+    }
     if (job.source === 'correction' && (!Number.isSafeInteger(job.quantity) || job.quantity < 0 || job.quantity > 1000000)) throw new Error('Enter a whole quantity between 0 and 1,000,000.');
     // Undo events are written only by undoScan, which checks what they reverse.
     const event = slimEvent({scannedValue: code, productId: job.productId || null,

@@ -139,3 +139,13 @@ test('retry all reports partial success while preserving the remaining scan and 
  assert.equal(state.events.events.filter(event=>event.aggApplied===0).length,1);
  assert.equal(state.itemList[0].quantity,1);
 });
+
+test('Uncounted retains only the active quantity row until staff move on', () => {
+ const index=new CountListIndex();index.update([{productId:'a',quantity:null},{productId:'b',quantity:null},{productId:'c',quantity:4},{productId:'extra',isRequested:false,quantity:0}]);
+ assert.deepEqual(index.list('','uncounted'),['a','b']);
+ index.update([{productId:'a',quantity:0},{productId:'b',quantity:null},{productId:'c',quantity:4},{productId:'extra',isRequested:false,quantity:0}]);
+ assert.deepEqual(index.list('','uncounted','a'),['a','b']);
+ assert.deepEqual(index.list('','uncounted','b'),['b']);
+ assert.deepEqual(index.list('','uncounted','extra'),['b']);
+ assert.deepEqual(index.list('','uncounted'),['b']);
+});

@@ -1,3 +1,4 @@
+import {Fragment,toChildArray} from 'preact';
 import {useRef,useState} from 'preact/hooks';
 
 export const amount=(value,noun)=>`${value} ${noun}${value===1?'':'s'}`;
@@ -9,10 +10,32 @@ export function BackButton({children='Back',disabled,onClick,loading=false}) {
   </s-stack>;
 }
 
-export function ActionRow({title,detail,notice,noticeTone='critical',meta,metaTone,onClick,disabled=false,imageUrl,showChevron=true}) {
+export function DividedRows({children}) {
+  const rows=toChildArray(children);
+  if(!rows.length)return null;
+  return <s-stack direction="block" gap="none">
+    {rows.map((row,index)=><Fragment key={row.key}>
+      {index>0&&<s-divider/>}
+      {row}
+    </Fragment>)}
+  </s-stack>;
+}
+
+// Product rows always keep the thumbnail slot so names line up; without a
+// source, POS draws its own image placeholder.
+export function Thumbnail({src}) {
+  return <s-box inlineSize="48px" minInlineSize="48px" blockSize="48px"><s-image src={src||undefined} objectFit="contain"/></s-box>;
+}
+
+// Secondary product text: identifiers that the title does not already show.
+export const productDetail=(title,values)=>values
+  .filter((value,index,all)=>value&&!String(title).includes(String(value))&&all.indexOf(value)===index)
+  .join(' · ');
+
+export function ActionRow({title,detail,notice,noticeTone='critical',meta,metaTone,onClick,disabled=false,imageUrl,thumbnail=false,showChevron=true}) {
   return <s-clickable disabled={disabled} onClick={onClick}>
     <s-box padding="base" minBlockSize="64px"><s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
-      <s-stack direction="inline" gap="base" alignItems="center">{imageUrl&&<s-box inlineSize="48px" blockSize="48px"><s-image src={imageUrl}/></s-box>}<s-stack direction="block" gap="small"><s-text type="strong">{title}</s-text>{detail&&<s-text color="subdued">{detail}</s-text>}{notice&&<s-text tone={noticeTone==='success'?'success':noticeTone==='neutral'?'neutral':'critical'}>{notice}</s-text>}</s-stack></s-stack>
+      <s-stack direction="inline" gap="base" alignItems="center">{(thumbnail||imageUrl)&&<Thumbnail src={imageUrl}/>}<s-stack direction="block" gap="small"><s-text type="strong">{title}</s-text>{detail&&<s-text color="subdued">{detail}</s-text>}{notice&&<s-text tone={noticeTone==='success'?'success':noticeTone==='neutral'?'neutral':'critical'}>{notice}</s-text>}</s-stack></s-stack>
       <s-stack direction="inline" gap="small" alignItems="center">{meta&&(metaTone?<s-badge tone={metaTone}>{meta}</s-badge>:<s-text>{meta}</s-text>)}{showChevron&&<s-icon type="chevron-right" />}</s-stack>
     </s-stack></s-box>
   </s-clickable>;

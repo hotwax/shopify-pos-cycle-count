@@ -33,7 +33,7 @@ export async function countRequest(action, payload = {}, options = {}) {
     throw new Error('POS is offline. Saved scans stay on this device and sync when connected.');
   const timeout = AbortSignal.timeout(options.timeoutMs ?? 55000);
   const signal = options.signal ? AbortSignal.any([timeout, options.signal]) : timeout;
-  const assertOwner = () => {assertNotAborted(signal);if (currentCountOwner() !== owner) throw new Error('POS user changed. Reopen Cycle Count.');};
+  const assertOwner = () => {assertNotAborted(signal);if (currentCountOwner() !== owner) throw new Error('POS user changed. Reopen Cycle count.');};
   const attempt = async () => {
     const {oms, identity, loginKey, reusedLogin} = await openDirectOms(shopify.session, session.locationId,
       {signal, storage: shopify.storage, readBudgetMs: LONG_READS.has(action) ? 45000 : undefined});
@@ -67,7 +67,7 @@ export async function countRequest(action, payload = {}, options = {}) {
 
 export function bindCountRequest(owner, options = {}) {
   const request = (action,payload,callOptions) => {
-    if (currentCountOwner() !== owner) return Promise.reject(new Error('POS user changed. Reopen Cycle Count.'));
+    if (currentCountOwner() !== owner) return Promise.reject(new Error('POS user changed. Reopen Cycle count.'));
     return countRequest(action,payload,{...options,...callOptions});
   };
   request.lookupBatch = codes => request('lookupBatch',{codes});
@@ -86,7 +86,7 @@ export function currentAuditContext() {
 
 export function currentDeviceId() {
   const value=shopify.session.deviceId;
-  if(!Number.isSafeInteger(value)||value<=0)throw new Error('Shopify could not identify this register. Reopen Cycle Count.');
+  if(!Number.isSafeInteger(value)||value<=0)throw new Error('Shopify could not identify this register. Reopen Cycle count.');
   return `POS_${value}`;
 }
 
@@ -110,7 +110,7 @@ export function subscribeScans(scanner, receive, now = () => Date.now()) {
 export function workStatus(status) {
   return {CYCLE_CNT_CREATED:"Scheduled",CYCLE_CNT_IN_PRGS:"In progress",CYCLE_CNT_CMPLTD:"Awaiting approval",CYCLE_CNT_CLOSED:"Reviewed",CYCLE_CNT_CNCL:"Cancelled"}[status] || status;
 }
-export {countTypeName} from '../../../shared/count-types';
+export {countTypeName,AREAS} from '../../../shared/count-types';
 
 export function countStatus(count) {
   if (count.countStatusId === "CYCLE_CNT_CLOSED") return "Reviewed";

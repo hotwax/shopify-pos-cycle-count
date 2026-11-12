@@ -1,0 +1,26 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "41bb8b2042d05ae284cbc6c68b54ce04"
+name = "Gorjana Cycle Count Sandbox"
+application_url = "https://shopify.dev/apps/default-app-home"
+embedded = true
+
+[webhooks]
+api_version = "2026-07"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = ""
+
+[auth]
+redirect_urls = []
+
+[build]
+automatically_update_urls_on_dev = true
+
+[access.admin]
+direct_api_mode = "online"
+embedded_app_direct_api_access = true
+
+[pos]
+embedded = true
