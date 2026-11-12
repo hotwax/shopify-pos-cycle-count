@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {recoverSubmission,sessionSubmitted,countSubmitted,directSession,countEntry} from '../extensions/hotwax-cycle-count/src/count-submission.js';
+import {recoverSubmission,sessionSubmitted,countSubmitted} from '../extensions/hotwax-cycle-count/src/count-submission.js';
 const open={statusId:'SESSION_ASSIGNED'},submitted={statusId:'SESSION_SUBMITTED'};
 
 test('lost submission response is reconciled without replaying its write',async()=>{
@@ -38,29 +38,6 @@ test('count approval handoff recovers its lost response without duplicate transi
   await recoverSubmission({read:async()=>({statusId:saved?'CYCLE_CNT_CMPLTD':'CYCLE_CNT_IN_PRGS'}),write:async()=>{writes++;saved=true;throw Error('timeout');},done:countSubmitted});
   assert.equal(writes,1);
 });
-test('direct entry only chooses one open session owned by this operator',()=>{
-  const mine={sessionId:'mine',mine:true,statusId:'SESSION_CREATED'},other={sessionId:'other',mine:false,statusId:'SESSION_ASSIGNED'};
-  assert.equal(directSession({sessions:[mine,other]}),mine);
-  assert.equal(directSession({sessions:[mine,{...mine,sessionId:'second'}]}),null);
-  assert.equal(directSession({sessions:[other,{...mine,statusId:'SESSION_SUBMITTED'}]}),null);
-});
-
-test('started imported counts lead to a session picker without relying on summary position',()=>{
-  const seed={sessionId:'imported',mine:false,statusId:'SESSION_CREATED'};
-  const info={statusId:'CYCLE_CNT_IN_PRGS',canCreateSession:true,sessions:[seed]};
-  assert.deepEqual(countEntry(info),{view:'sessions'});
-  const own={...seed,mine:true};
-  assert.deepEqual(countEntry({...info,sessions:[own]}),{view:'session',session:own});
-  assert.deepEqual(countEntry({...info,sessions:[own,{...own,sessionId:'second'}]}),{view:'sessions'});
-  assert.deepEqual(countEntry({...info,sessions:[]}),{view:'create'});
-  assert.deepEqual(countEntry({...info,sessions:[{...own,statusId:'SESSION_SUBMITTED'}]}),{view:'create'});
-});
-
-test('scheduled and finished counts never expose a counting entry even with an owned session',()=>{
-  for(const statusId of ['CYCLE_CNT_CREATED','CYCLE_CNT_CMPLTD','CYCLE_CNT_CLOSED','CYCLE_CNT_CNCL'])
-    assert.deepEqual(countEntry({statusId,canCreateSession:false,sessions:[{sessionId:'mine',mine:true,statusId:'SESSION_CREATED'}]}),{view:'summary'});
-});
-
 test('confirmed submission keeps local quantities and journal when persisting read-only status',async()=>{
   const {CountState}=await import('../extensions/hotwax-cycle-count/src/count-state.js');
   const data=new Map(),storage={get:async key=>structuredClone(data.get(key)),set:async(key,value)=>data.set(key,structuredClone(value)),delete:async key=>data.delete(key)};
@@ -97,4 +74,16 @@ test('submission checks the saved session aggregate, including zero, without inv
     }};
     assert.equal(await hasSavedQuantity('session','work',oms as any),counted!==null);
   }
+});
+
+test('a preparation failure blocks submission and surfaces the validation error immediately',async()=>{
+  let reads=0,writes=0;
+  await assert.rejects(recoverSubmission({
+    read:async()=>{reads++;return open;},
+    prepare:async()=>{throw Error('Count at least one product');},
+    write:async()=>{writes++;return submitted;},
+    done:sessionSubmitted,
+  }),/Count at least one product/);
+  assert.equal(reads,1);
+  assert.equal(writes,0);
 });

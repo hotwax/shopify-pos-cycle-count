@@ -79,6 +79,14 @@ declare module './src/CountWorkspace.jsx' {
 }
 
 //@ts-ignore
+declare module './src/count-navigation.js' {
+  const shopify:
+    | import('@shopify/ui-extensions/pos.home.modal.render').Api
+    | import('@shopify/ui-extensions/pos.product-details.action.render').Api;
+  const globalThis: { shopify: typeof shopify };
+}
+
+//@ts-ignore
 declare module './src/count-state.js' {
   const shopify:
     | import('@shopify/ui-extensions/pos.home.modal.render').Api
@@ -212,6 +220,14 @@ declare module './src/count-submission.js' {
 
 //@ts-ignore
 declare module './src/count-list.js' {
+  const shopify:
+    | import('@shopify/ui-extensions/pos.home.modal.render').Api
+    | import('@shopify/ui-extensions/pos.product-details.action.render').Api;
+  const globalThis: { shopify: typeof shopify };
+}
+
+//@ts-ignore
+declare module './src/count-quantity-edits.js' {
   const shopify:
     | import('@shopify/ui-extensions/pos.home.modal.render').Api
     | import('@shopify/ui-extensions/pos.product-details.action.render').Api;

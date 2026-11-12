@@ -1,6 +1,6 @@
 import {useEffect,useRef,useState} from 'preact/hooks';
 import {CatalogPicker} from './CatalogPicker.jsx';
-import {ActionRow,BackButton} from './FlowParts.jsx';
+import {ActionRow,BackButton,DividedRows} from './FlowParts.jsx';
 import {countTypeName} from './count-api';
 import {controlFor} from './count-control';
 // The count being created: its draft and its pending creation live in control.
@@ -82,7 +82,7 @@ export function CreateCount({request,storage,owner,timeZone,onCreated,back}) {
         <s-text>{pending.current?.startDate||start?`Starts ${pending.current?.startDate||start}`:'Start when ready'} · {pending.current?.dueDate||due?`Due ${pending.current?.dueDate||due}`:'No deadline'}</s-text>
         {type==='DYNAMIC_COUNT'&&<s-text color="subdued">Include all units of each listed product, including back stock.</s-text>}
       </s-stack></s-section>
-      {duplicates?<><s-text>{type==='DYNAMIC_COUNT'?'A count with this name is already open. Choose a different name, or return to All counts to continue it.':'A count with this name is already open. Add these products to an existing count, or choose a different name.'}</s-text>{type!=='DYNAMIC_COUNT'&&duplicates.map(item=><ActionRow key={item.workEffortId} title={item.name} detail={countTypeName(item.type)} disabled={busy||item.type!==type} onClick={()=>create(item.workEffortId)}/>)}<s-button disabled={busy} onClick={async()=>{await saveOperation(null);pending.current=null;setDuplicates(null);setStep('details');}}>Choose another name</s-button></>:<s-button variant="primary" loading={busy} disabled={busy} onClick={()=>create(undefined,!start)}> {pending.current?.startNow||!start?'Start counting':'Create scheduled count'}</s-button>}
+      {duplicates?<><s-text>{type==='DYNAMIC_COUNT'?'A count with this name is already open. Choose a different name, or return to All counts to continue it.':'A count with this name is already open. Add these products to an existing count, or choose a different name.'}</s-text>{type!=='DYNAMIC_COUNT'&&<DividedRows>{duplicates.map(item=><ActionRow key={item.workEffortId} title={item.name} detail={countTypeName(item.type)} disabled={busy||item.type!==type} onClick={()=>create(item.workEffortId)}/>)}</DividedRows>}<s-button disabled={busy} onClick={async()=>{await saveOperation(null);pending.current=null;setDuplicates(null);setStep('details');}}>Choose another name</s-button></>:<s-button variant="primary" loading={busy} disabled={busy} onClick={()=>create(undefined,!start)}> {pending.current?.startNow||!start?'Start counting':'Create scheduled count'}</s-button>}
     </>}
   </s-stack></s-box></s-scroll-box>;
 }

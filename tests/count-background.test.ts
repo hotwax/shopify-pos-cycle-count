@@ -69,3 +69,16 @@ test('coordination flags are short heartbeats, so a stopped runtime releases jou
   const started=Date.now(),release=await enterForeground(f.native,'owner');
   assert.ok(Date.now()-started>=250);await release();
 });
+
+test('a second foreground runtime waits for the first native screen to finish its journal work',async()=>{
+  const f=fixture(),closeFirst=await enterForeground(f.native,'owner');
+  const first=f.data.get('hotwax-count:foreground').id;
+  const second=enterForeground(f.native,'owner');
+  try {
+    await new Promise(resolve=>setTimeout(resolve,20));
+    assert.equal(f.data.get('hotwax-count:foreground').id,first);
+  } finally {
+    await closeFirst();
+    await (await second)();
+  }
+});

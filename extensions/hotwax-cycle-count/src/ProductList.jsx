@@ -2,6 +2,7 @@ import {memo} from './memo';
 import {useId,useMemo,useRef,useState,useEffect} from 'preact/hooks';
 import {CountListIndex,PRODUCT_PAGE_SIZE} from './count-list';
 import {ProductRow} from './ProductRow.jsx';
+import {DividedRows} from './FlowParts.jsx';
 
 export function CompactPager({page,pages,total,onPage,disabled,label='products'}) {
   if(pages<=1)return null;
@@ -11,7 +12,7 @@ export function CompactPager({page,pages,total,onPage,disabled,label='products'}
     <s-button disabled={disabled||page+1>=pages} onClick={()=>onPage(page+1)}>Next</s-button>
   </s-stack>;
 }
-function ProductListContent({items,disabled=false,directed=false,onSelect,onQuantity,selected,initialView='all',filters=true,showTabs=true,activeView,memory,countExtras=false,renderViewActions,listIndex,search:searchShop,onVisible}) {
+function ProductListContent({items,disabled=false,directed=false,onSelect,onQuantity,onQuantityInput,selected,initialView='all',filters=true,showTabs=true,activeView,memory,countExtras=false,renderViewActions,listIndex,search:searchShop,onVisible}) {
   // Keep the product being edited visible in Uncounted until staff move on.
   const [editingId,setEditingId]=useState('');
   const [search,setSearch]=useState(memory?.search||''),[selectedView,setView]=useState(memory?.view||initialView),[page,setPage]=useState(memory?.page||0);
@@ -68,12 +69,12 @@ function ProductListContent({items,disabled=false,directed=false,onSelect,onQuan
       </s-choice-list>
       <s-button slot="primary-action" command="--hide" commandFor={sortId}>Done</s-button>
     </s-modal>}
-    {!result.total&&<s-text>{view==='uncounted'&&!query&&items.length?'All products counted.':query?'No matching products.':'No products in this view.'}</s-text>}
+    {!result.total&&<s-text>{view==='uncounted'&&!query&&items.length?'All products counted.':query?'No matching products.':view==='counted'?'No products counted yet.':'No products in this view.'}</s-text>}
     {/* Shopify hits can reorder a page after local matches render. Key the
         bounded native row subtree by that order for both search phases. */}
-    <s-stack direction="block" gap={onQuantity?'small':'none'} key={`${view}:${sort}:${search}:${onQuantity?page:result.items.map(item=>item.productId).join(",")}`}>
-      {result.items.map(item=><ProductRow key={item.productId} item={item} selected={selected?.has(item.productId)} disabled={disabled} onSelect={onSelect} onQuantity={onQuantity} onActivate={setEditingId}/>)}
-    </s-stack>
+    <DividedRows key={`${view}:${sort}:${search}:${onQuantity?page:result.items.map(item=>item.productId).join(",")}`}>
+      {result.items.map(item=><ProductRow key={item.productId} item={item} selected={selected?.has(item.productId)} disabled={disabled} onSelect={onSelect} onQuantity={onQuantity} onQuantityInput={onQuantityInput} onActivate={setEditingId}/>)}
+    </DividedRows>
     {result.total>PRODUCT_PAGE_SIZE&&<CompactPager {...result} disabled={disabled} onPage={setPage}/>}
   </s-stack>;
 }

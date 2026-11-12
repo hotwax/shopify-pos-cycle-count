@@ -11,7 +11,7 @@ import { handleWorkflow } from "./oms-count-workflows";
 import {manageLease, leaseDevice, sessionLease} from './oms-count-lease';
 import {countingPreferences, matchCodes, countableProducts, catalogPage, productSearchDetails} from './oms-count-products';
 import {handleCountCreation} from './oms-count-create';
-import {COUNT_TYPES} from './count-types';
+import {AREAS, COUNT_TYPES} from './count-types';
 import { shopFacility } from "./oms-shop";
 import {
   COUNT_PERMISSIONS,
@@ -95,6 +95,7 @@ async function context(identity: CountIdentity, oms: OmsConnection) {
     canViewOnHand: capabilities.canViewOnHand,
     canCreate: capabilities.canCreate,
     canSubmit: capabilities.canSubmit,
+    canDiscard: capabilities.canDiscard,
     canPrestart: capabilities.canPrestart,
     canPreview: capabilities.canPreview,
     canRelease: capabilities.canRelease,
@@ -364,7 +365,7 @@ export async function handleCount(
     if(!EDITABLE.has(text(fresh.session.statusId)))throw new OmsLookupError('Session status changed. Refresh first.',409);
     if(action==='editSession'){
       const name=text(payload.name).trim(),area=text(payload.area);
-      if(!name||name.length>100||!['back_stock','display','floor_wall','floor_shelf','overflow','register'].includes(area))throw new OmsLookupError('Enter a session name and choose a session location.',400);
+      if(!name||name.length>100||!AREAS.some(a=>a.id===area))throw new OmsLookupError('Enter a session name and choose a session location.',400);
       await oms.mutate(resource(sessionId),{countImportName:name,facilityAreaId:area},'PUT');
     }else await oms.mutate(resource(sessionId),{statusId:'SESSION_VOIDED'},'PUT');
     return countDetail(sessionId,ctx,oms);

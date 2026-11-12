@@ -1,7 +1,7 @@
-import {HandQuantityRow} from './HandQuantityRow.jsx';
+import {HandProductIdentity,HandQuantityRow} from './HandQuantityRow.jsx';
 import {useCallback,useEffect,useMemo,useRef,useState} from 'preact/hooks';
 import {CatalogPicker} from './CatalogPicker.jsx';
-import {BackButton,amount} from './FlowParts.jsx';
+import {BackButton,DividedRows,amount} from './FlowParts.jsx';
 import {CompactPager} from './ProductList.jsx';
 import {controlFor} from './count-control';
 
@@ -107,7 +107,7 @@ export function HandCount({request,engine,storage,owner,count,done,disabled=fals
       <s-stack direction="inline" alignItems="center" justifyContent="space-between" gap="base">
         <s-text type="strong">{amount(entries.length,'product')} · {amount(units,'unit')} to add</s-text>
       </s-stack>
-      <CatalogPicker request={request} allowedIds={allowed} memory={searchMemory.current} disabled={busy||disabled||locked} renderProduct={(product,rowDisabled)=><HandQuantityRow key={product.productId} product={product} value={quantities.get(product.productId)||''} already={counted.get(product.productId)||0} disabled={rowDisabled} notRequested={!!allowed&&!allowed.has(product.productId)} canViewOnHand={count.canViewOnHand} change={change}/>}/>
+      <CatalogPicker request={request} allowedIds={allowed} memory={searchMemory.current} disabled={busy||disabled||locked} renderProduct={(product,rowDisabled)=><HandQuantityRow key={product.productId} product={product} value={quantities.get(product.productId)||''} disabled={rowDisabled} notRequested={!!allowed&&!allowed.has(product.productId)} change={change}/>}/>
     </>}
     {step==='review'&&<>
       <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
@@ -115,23 +115,18 @@ export function HandCount({request,engine,storage,owner,count,done,disabled=fals
       </s-stack>
       {locked&&<s-banner tone="info" heading="Finish saving">Your quantities are kept. Retrying will not add them twice.</s-banner>}
       {!entries.length&&<s-text>No pending products. Go back to Hand count to add products.</s-text>}
-      {entries.slice(page*40,(page+1)*40).map(entry=><s-section key={entry.product.productId}>
+      <DividedRows>{entries.slice(page*40,(page+1)*40).map(entry=><s-box key={entry.product.productId} paddingBlock="base">
         <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
-          <s-stack direction="inline" gap="base" alignItems="center" maxInlineSize="360px">
-            {entry.product.imageUrl&&<s-box inlineSize="48px" minInlineSize="48px" blockSize="48px"><s-image src={entry.product.imageUrl} objectFit="contain"/></s-box>}
-            <s-stack direction="block" gap="small" maxInlineSize="296px">
-              <s-text type="strong">{entry.product.title||entry.product.sku}</s-text>
-              <s-text color="subdued">{entry.product.primary||entry.product.sku||entry.product.productId}</s-text>
-              <s-text>Add {entry.quantity} units</s-text>
-            </s-stack>
-          </s-stack>
+          <HandProductIdentity product={entry.product}/>
           <s-stack direction="inline" gap="base" alignItems="center">
-            <s-stack direction="block" gap="small"><s-text color="subdued">{batchRecorded?'Counted in session':'Already counted'}</s-text><s-text type="strong">{counted.get(entry.product.productId)||0}</s-text></s-stack>
-            <s-stack direction="block" gap="small"><s-text color="subdued">{batchRecorded?'Saved total':'After saving'}</s-text><s-text type="strong">{Number(counted.get(entry.product.productId)||0)+(batchRecorded?0:Number(entry.quantity))}</s-text></s-stack>
-            <s-button disabled={busy||disabled||locked} onClick={()=>discard(entry.product)}>Discard</s-button>
+            <s-stack direction="block" gap="none">
+              <s-text type="strong">{batchRecorded?'Added':'Add'} {amount(Number(entry.quantity),'unit')}</s-text>
+              <s-text color="subdued">Session total {Number(counted.get(entry.product.productId)||0)+(batchRecorded?0:Number(entry.quantity))}</s-text>
+            </s-stack>
+            {!locked&&<s-button disabled={busy||disabled} onClick={()=>discard(entry.product)}>Remove</s-button>}
           </s-stack>
         </s-stack>
-      </s-section>)}
+      </s-box>)}</DividedRows>
       <CompactPager page={page} pages={Math.max(1,Math.ceil(entries.length/40))} total={entries.length} onPage={setPage} disabled={busy}/>
     </>}
   </s-stack>;

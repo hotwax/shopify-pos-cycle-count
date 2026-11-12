@@ -1,14 +1,11 @@
 import {sessionLease,activeSessionLease,describe as describeLease,leaseDevice} from './oms-count-lease';
-import {COUNT_TYPES} from './count-types';
+import {AREAS, COUNT_TYPES} from './count-types';
 import {OmsConnection, OmsLookupError, rows, text, requireCountConnection, type OmsRow} from './oms-connection';
 import {BASE, EDITABLE, countWork, countDetail, sessionRows, productDetails, validId, resource, number, type Context, type CountIdentity, canPreviewCount, requirePreview, ownedCount, withCountLock} from './oms-count';
 
-export const AREAS = [
-  {id: 'back_stock', name: 'Back stock'}, {id: 'display', name: 'Display'},
-  {id: 'floor_wall', name: 'Floor wall'}, {id: 'floor_shelf', name: 'Floor shelf'},
-  {id: 'overflow', name: 'Overflow'}, {id: 'register', name: 'Register'},
-];
+export {AREAS};
 const workPath = (id: string) => `${BASE}/workEfforts/${validId(id)}`;
+const discardable = (status: unknown) => status === 'CYCLE_CNT_CREATED' || status === 'CYCLE_CNT_IN_PRGS';
 function page(value: unknown) {
   const index = Number(value ?? 0);
   if (!Number.isSafeInteger(index) || index < 0 || index > 10000) throw new OmsLookupError('Invalid page.', 400);
@@ -39,6 +36,7 @@ async function overview(id: string, ctx: Context, oms: OmsConnection) {
   const work = await countWork(id, ctx, oms), sessions = await countSessions(id, oms);
   return {...summary(work), sessions: sessions.map(s => sessionSummary(s, ctx, work)), areas: AREAS,
     canCreateSession: text(work.statusId) === 'CYCLE_CNT_IN_PRGS', canComplete: ctx.canSubmit, canPreview:canPreviewCount(work,ctx),
+    canDiscard: ctx.canDiscard && discardable(work.statusId),
     canStart: text(work.statusId) === 'CYCLE_CNT_CREATED' && (Number(work.estimatedStartDate || 0) <= Date.now() || ctx.canPrestart)};
 }
 export async function reviewRows(id: string, oms: OmsConnection, productId?: string) {
@@ -197,7 +195,7 @@ export async function handleWorkflow(identity: CountIdentity, payload: OmsRow, c
     const locks=rows(result.entityValueList),device=leaseDevice(identity.deviceId);
     return {items:ids.map(sessionId=>({sessionId,...describeLease(activeSessionLease(locks.filter(row=>text(row.inventoryCountImportId)===sessionId)),ctx.username,device)}))};
   }
-  if (action==='progress') return countProgress(id,ctx,oms);
+  if (action==='progress') return countProgress(id,ctx,oms,payload.compact!==true);
   if (action==='contributions') {
     requirePreview(await countWork(id,ctx,oms),ctx);
     const productId=text(payload.productId);validId(productId);
@@ -232,7 +230,7 @@ export async function handleWorkflow(identity: CountIdentity, payload: OmsRow, c
     }
     return withCountLock(sessionId,ctx,oms,edit,undefined,identity.deviceId);
   }
-  if (!['createSession','startCount','completeCount','confirmZero','discardUndirected'].includes(action)) return undefined;
+  if (!['createSession','startCount','completeCount','discardCount','confirmZero','discardUndirected'].includes(action)) return undefined;
   requireCountConnection(identity.shop);
   if (action==='createSession') return createSession(id,payload,ctx,oms);
   const work=await countWork(id,ctx,oms);
@@ -241,6 +239,29 @@ export async function handleWorkflow(identity: CountIdentity, payload: OmsRow, c
     if(text(work.statusId)!=='CYCLE_CNT_CREATED' || (Number(work.estimatedStartDate || 0)>Date.now() && !ctx.canPrestart)) throw new OmsLookupError('This scheduled count cannot be started yet.',403);
     await oms.mutate(workPath(id),{statusId:'CYCLE_CNT_IN_PRGS',actualStartDate:Date.now()},'PUT');
     return overview(id,ctx,oms);
+  }
+  if (action==='discardCount') {
+    if (!ctx.canDiscard) throw new OmsLookupError('Your OMS account cannot discard cycle counts.',403);
+    if (work.statusId==='CYCLE_CNT_CNCL') return overview(id,ctx,oms);
+    if (!discardable(work.statusId)) throw new OmsLookupError('Only open counts can be discarded.',409);
+    const sessions=await countSessions(id,oms);
+    if (sessions.some(session=>session.statusId==='SESSION_APPROVED'))
+      throw new OmsLookupError('An approved session cannot be discarded.',409);
+    const pending=sessions.filter(session=>session.statusId!=='SESSION_VOIDED');
+    // Match Inventory Count's two existing work-effort updates. A retry
+    // skips session voids that were already confirmed before interruption.
+    if (pending.length) await oms.mutate(workPath(id),{workEffortId:id,InventoryCountImport:pending.map(session=>({
+      inventoryCountImportId:text(session.inventoryCountImportId),statusId:'SESSION_VOIDED',
+    }))},'PUT');
+    if ((await countSessions(id,oms)).some(session=>session.statusId!=='SESSION_VOIDED'))
+      throw new OmsLookupError('Some sessions are still open. Check the count and retry discard.',409);
+    const fresh=await countWork(id,ctx,oms);
+    if (fresh.statusId==='CYCLE_CNT_CNCL') return overview(id,ctx,oms);
+    if (!discardable(fresh.statusId)) throw new OmsLookupError('The count changed. Refresh it before discarding.',409);
+    await oms.mutate(workPath(id),{workEffortId:id,statusId:'CYCLE_CNT_CNCL'},'PUT');
+    const result=await overview(id,ctx,oms);
+    if (result.statusId!=='CYCLE_CNT_CNCL') throw new OmsLookupError('HotWax could not confirm the discard. Check and retry.',409);
+    return result;
   }
   if(!ctx.canSubmit) throw new OmsLookupError('Your OMS account cannot manage count completion.',403);
   if(action==='completeCount' && text(work.statusId)==='CYCLE_CNT_CMPLTD') return overview(id,ctx,oms);

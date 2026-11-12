@@ -17,6 +17,9 @@ function heartbeat(storage,key,value) {
   return {renew,close};
 }
 export async function enterForeground(storage,owner) {
+  // A native Back can expose another session before the popped runtime has
+  // finished its journal writes. Let that runtime close or its heartbeat expire.
+  while ((await storage.get(FOREGROUND))?.expiresAt > Date.now()) await delay(200);
   const flag = heartbeat(storage,FOREGROUND,{id:token(),owner});
   try {
     await flag.renew();

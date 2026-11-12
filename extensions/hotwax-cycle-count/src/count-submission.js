@@ -1,10 +1,11 @@
 // A timeout is not evidence that a write failed. Read before retrying, and only
 // repeat reads after a failed write. The caller retains its journal throughout.
-export async function recoverSubmission({read,write,done,checking=()=>{},current=()=>true,wait=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {
+export async function recoverSubmission({read,prepare,write,done,checking=()=>{},current=()=>true,wait=ms=>new Promise(resolve=>setTimeout(resolve,ms))}) {
   const assertCurrent=()=>{if(!current())throw new Error('Counting user changed. Reopen the count.');};
   assertCurrent();
   const before=await read();assertCurrent();
   if(done(before))return before;
+  if(prepare){await prepare();assertCurrent();}
   try {const result=await write();assertCurrent();if(done(result))return result;}
   catch(error){
     assertCurrent();
@@ -27,19 +28,3 @@ export async function recoverSubmission({read,write,done,checking=()=>{},current
 
 export const sessionSubmitted=value=>['SESSION_SUBMITTED','SESSION_APPROVED'].includes(value?.statusId);
 export const countSubmitted=value=>['CYCLE_CNT_CMPLTD','CYCLE_CNT_CLOSED'].includes(value?.statusId);
-
-// Only bypass session selection when there is one clear session for this user.
-export function directSession(info) {
-  const sessions=info.sessions.filter(s=>s.mine&&['SESSION_CREATED','SESSION_ASSIGNED'].includes(s.statusId));
-  return sessions.length===1?sessions[0]:null;
-}
-
-// Starting must always land on a counting action, never a summary with a
-// session choice hidden among products. Imported sessions still need a picker.
-export function countEntry(info) {
-  if(info.statusId!=='CYCLE_CNT_IN_PRGS')return {view:'summary'};
-  const session=directSession(info);
-  if(session)return {view:'session',session};
-  if(info.sessions.some(s=>['SESSION_CREATED','SESSION_ASSIGNED'].includes(s.statusId)))return {view:'sessions'};
-  return {view:info.canCreateSession?'create':'summary'};
-}

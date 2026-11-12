@@ -14,9 +14,10 @@ test("ordinary counters do not inherit inventory visibility", () => {
       canAccess: true,
       canCreate: true,
       canSubmit: false,
+      canDiscard: false,
       canPrestart: false,
-    canPreview: false,
-    canRelease: false,
+      canPreview: false,
+      canRelease: false,
       canViewOnHand: false,
     },
   );
@@ -30,6 +31,7 @@ test("store counters can create while QOH and preview stay permissioned", () => 
     canAccess: true,
     canCreate: true,
     canSubmit: false,
+    canDiscard: false,
     canPrestart: false,
     canPreview: false,
     canRelease: false,
@@ -39,6 +41,7 @@ test("store counters can create while QOH and preview stay permissioned", () => 
     canAccess: false,
     canCreate: false,
     canSubmit: false,
+    canDiscard: false,
     canPrestart: false,
     canPreview: false,
     canRelease: false,
@@ -51,6 +54,7 @@ test("count admins have access to count and inventory visibility", () => {
       canAccess: true,
       canCreate: true,
       canSubmit: true,
+      canDiscard: true,
       canPrestart: true,
       canPreview: true,
       canRelease: true,
@@ -74,4 +78,10 @@ test("cycle count review submission requires its own permission", () => {
   ]);
   assert.equal(result.canSubmit, true);
   assert.equal(result.canViewOnHand, false);
+});
+
+test('discarding an entire count is reserved for count admins', () => {
+  assert.equal(countCapabilities(["INV_COUNT_ADMIN"]).canDiscard, true);
+  assert.equal(countCapabilities(["COMMON_ADMIN"]).canDiscard, true);
+  assert.equal(countCapabilities(["INVCOUNT_APP_VIEW", "INV_COUNT_SUBMIT"]).canDiscard, false);
 });

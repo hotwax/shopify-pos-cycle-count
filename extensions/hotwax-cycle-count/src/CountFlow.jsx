@@ -1,21 +1,22 @@
 import {useEffect,useMemo,useRef,useState} from 'preact/hooks';
 import {countStatus,countTypeName,workStatus} from './count-api';
 import {ProductList,CompactPager} from './ProductList.jsx';
-import {ActionRow,BackButton,amount} from './FlowParts.jsx';
-import {recoverSubmission,countSubmitted,countEntry} from './count-submission';
+import {ActionRow,BackButton,DividedRows,amount} from './FlowParts.jsx';
+import {recoverSubmission,countSubmitted} from './count-submission';
 import {controlFor} from './count-control';
 const operationId=()=>Array.from({length:15},()=>Math.floor(Math.random()*16).toString(16)).join('');
 const sameProducts=(a,b)=>[...a].sort().join(',')===[...b].sort().join(',');
 // The last product summary per count, shown at once while a fresh one loads.
 const progressCache=new Map();
 
-export function CountFlow({workEffortId,openSession,back,storage,owner,request,setHeader}) {
+export function CountFlow({workEffortId,openSession,storage,owner,request,setHeader,navigationError,refreshVersion}) {
   const [info,setInfo]=useState(null),[progress,setProgress]=useState(null),[view,setView]=useState('summary');
   const [error,setError]=useState(''),[busy,setBusy]=useState(true),[area,setArea]=useState('register'),[page,setPage]=useState(0);
   const [selected,setSelected]=useState(new Set()),[decision,setDecision]=useState(''),[product,setProduct]=useState(null),[contributions,setContributions]=useState(null);
   const [contribution,setContribution]=useState(null),[contributionQuantity,setContributionQuantity]=useState(''),[decisionProgress,setDecisionProgress]=useState('');
+  const [approval,setApproval]=useState(null);
   const [completionMessage,setCompletionMessage]=useState(''),[savedDecision,setSavedDecision]=useState(false);
-  const [showSessions,setShowSessions]=useState(false),[sessionName,setSessionName]=useState(''),[pendingCreate,setPendingCreate]=useState(null);
+  const [sessionName,setSessionName]=useState(''),[pendingCreate,setPendingCreate]=useState(null);
   const cacheKey=`${owner}:${workEffortId}`,control=controlFor(storage.native||storage,owner);
   // Pending decisions and session creations live in the operator's control record;
   // a value an earlier release kept under its own key is moved there on first use.
@@ -46,28 +47,34 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
   }
   async function refresh(withProducts=false) {
     if(withProducts){await loadProducts();return;}
+    progressRequest.current++;setProgressBusy(false);setProgressError('');
     const result=await request('overview',{workEffortId});
     if(!active.current)return;
     setInfo(result);
     setLockRefresh(value=>value+1);
-    // The overview unlocks session navigation before large product scopes finish.
-    if(result.canPreview)void loadProducts();
-    else {progressRequest.current++;setProgress(null);setProgressBusy(false);setProgressError('');}
   }
   useEffect(()=>{
     active.current=true;
     const cached=progressCache.get(cacheKey);
     if(cached){setInfo(cached);setProgress(cached);}
-    run(async()=>{await refresh();const pending=await loadDecision();if(pending&&active.current){setSelected(new Set(pending.productIds));setDecision(pending.action);setSavedDecision(true);setView('confirm');}});
+    run(async()=>{await refresh();const pending=await loadDecision();if(pending&&active.current){setSelected(new Set(pending.productIds));setDecision(pending.action);setSavedDecision(true);setView('confirm');await loadProducts();}});
     return()=>{active.current=false;progressRequest.current++;};
   },[workEffortId]);
-  const availableSessions=info?.sessions.filter(session=>['SESSION_CREATED','SESSION_ASSIGNED'].includes(session.statusId))||[];
-  const visibleSessions=view==='sessions'?availableSessions:info?.sessions||[];
-  const lockIds=info?.statusId==='CYCLE_CNT_IN_PRGS'?visibleSessions.slice(sessionPage*20,(sessionPage+1)*20).filter(session=>['SESSION_CREATED','SESSION_ASSIGNED'].includes(session.statusId)).map(session=>session.sessionId).join(','):'';
+  useEffect(()=>{
+    if(!refreshVersion)return;
+    if(view==='create')setView('summary');
+    void run(()=>refresh());
+  },[refreshVersion]);
+  const openSessions=info?.sessions.filter(session=>session.editable)||[];
+  const pastSessions=info?.sessions.filter(session=>!session.editable)||[];
+  const visibleSessions=view==='completed'?pastSessions:openSessions;
+  const visiblePage=Math.min(sessionPage,Math.max(0,Math.ceil(visibleSessions.length/20)-1));
+  const pageSessions=visibleSessions.slice(visiblePage*20,(visiblePage+1)*20);
+  const lockIds=view==='summary'?pageSessions.map(session=>session.sessionId).join(','):'';
   useEffect(()=>{
     let stopped=false,timer=0;
     setLocks({});setLockError('');
-    if(!['summary','sessions'].includes(view)||!lockIds)return;
+    if(!lockIds)return;
     async function refreshLocks(){
       try {
         const result=await request('sessionLocks',{workEffortId,sessionIds:lockIds.split(',')});
@@ -84,8 +91,20 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
     if(lock.available||lock.owned||(lock.expiresAt!=null&&lock.expiresAt<=Date.now()))return {};
     return {notice:`Open on another register · ${lock.operator||'another user'}`,noticeTone:lock.owned?'success':'critical'};
   }
-  const heading=({summary:info?.name||'Count summary',sessions:'Choose session',create:'Start a new session',product:product?.title||product?.sku||'Product details',editContribution:'Session contribution',zero:'Mark as out of stock',extras:'Extra products',confirm:decision==='completeCount'?'Send count for approval':'Review selected products'})[view];
-  useEffect(()=>{setHeader?.({heading,subheading:view==='summary'?'':info?.name||''});},[heading,view,info?.name,setHeader]);
+  const heading=({
+    summary:info?.name||'Count summary', completed:'Session history', create:'Start a new session',
+    products:'Products', product:product?.title||product?.sku||'Product details', editContribution:'Session contribution',
+    discard:'Discard cycle count', zero:'Mark as out of stock', extras:'Extra products',
+    confirm:decision==='completeCount'?'Submit for approval':'Review selected products',
+  })[view];
+  useEffect(()=>{
+    const subheading=view==='summary'&&info?`${countTypeName(info.type)} · ${workStatus(info.statusId)}`:info?.name||'';
+    setHeader?.({heading,subheading,action:view==='summary'&&info?.canPreview
+      ?{label:'Products',disabled:busy,onClick:showProducts}:null});
+  },[heading,view,info?.name,info?.statusId,info?.canPreview,busy,setHeader]);
+  function showProducts() {
+    setError('');setView('products');void loadProducts();
+  }
   async function showCreate() {
     // An unfinished earlier attempt is offered for retry with its own name and location.
     let pending=null;
@@ -103,7 +122,7 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
     if(!pending){pending={workEffortId,operationId:operationId(),name:typed,area};if(!pending.name)throw new Error('Enter a session name.');await setCreateRecord(pending);}
     for(let attempt=0;attempt<6;attempt++) {
       const result=await request('createSession',pending);
-      if(!result.preparing){await setCreateRecord(null);setPendingCreate(null);if(active.current)await openSession(result.session.sessionId,result.session);return;}
+      if(!result.preparing){await setCreateRecord(null);setPendingCreate(null);if(active.current)await openSession(result.session.sessionId,result.session.name);return;}
       setError(`Preparing your list · ${result.remaining} products remaining.`);
     }
     throw new Error('Your session is saved. Choose Start counting again to finish loading its product list.');
@@ -111,11 +130,11 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
   async function cancelDecision() {
     await setDecisionRecord(null);
     if(!active.current)return;
-    setSavedDecision(false);setDecisionProgress('');setSelected(new Set());setView('summary');await refresh(true);
+    setSavedDecision(false);setDecisionProgress('');setSelected(new Set());setView('products');await refresh(true);
   }
   async function confirm() {
     if(decision==='completeCount'){
-      try {await recoverSubmission({read:()=>request('countSubmissionStatus',{workEffortId}),write:()=>request(decision,{workEffortId}),done:countSubmitted,current:()=>active.current,checking:()=>setDecisionProgress('Checking submission…')});await refresh(true);setView('summary');}
+      try {await recoverSubmission({read:()=>request('countSubmissionStatus',{workEffortId}),write:()=>request(decision,{workEffortId}),done:countSubmitted,current:()=>active.current,checking:()=>setDecisionProgress('Checking submission…')});await refresh();setView('summary');}
       finally {if(active.current)setDecisionProgress('');}return;
     }
     let pending=await loadDecision();
@@ -146,111 +165,105 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
     }
     await setDecisionRecord(null);setSavedDecision(false);setDecisionProgress('');await refresh(true);
     setCompletionMessage(decision==='confirmZero'?`${amount(selected.size,'product')} marked as out of stock. Zero quantities have been recorded.`:`${amount(selected.size,'extra product')} discarded.`);
-    setSelected(new Set());setView('summary');
+    setSelected(new Set());setView('products');
   }
   async function showProduct(item) {
     setProduct(item);setContributions(null);setPage(0);setView('product');
     await run(async()=>{const result=await request('contributions',{workEffortId,productId:item.productId});if(active.current)setContributions(result.items);});
   }
   function toggle(item) {setSelected(old=>{const next=new Set(old);if(next.has(item.productId))next.delete(item.productId);else next.add(item.productId);return next;});}
-  const entry=info&&countEntry(info);
-  async function enterCounting(next=info){
-    const destination=countEntry(next);
-    if(destination.session)await openSession(destination.session.sessionId,undefined,destination.session.name);
-    else if(destination.view==='create')await showCreate();
-    else {setSessionPage(0);setView(destination.view);}
-  }
-  async function startCounting(){
-    // A pre-start product read must not overwrite the freshly started overview.
-    progressRequest.current++;setProgressBusy(false);
+  async function startCounting() {
     const started=await request('startCount',{workEffortId});
+    if(active.current){setInfo(started);setLockRefresh(value=>value+1);}
+  }
+  async function reviewApproval() {
+    if(openSessions.length)throw new Error('Complete all open sessions before submitting this count.');
+    const result=await request('progress',{workEffortId,compact:true});
     if(!active.current)return;
-    setInfo(started);await enterCounting(started);
+    if(!result.canFinish)throw new Error(result.uncounted
+      ?'Open Products to count or confirm zero for the remaining items.'
+      :'Complete at least one session before submitting this count.');
+    const counted=result.items.filter(item=>item.quantity!=null&&item.decision!=='SKIPPED');
+    setApproval({products:counted.length,units:counted.reduce((total,item)=>total+item.quantity,0)});
+    setDecision('completeCount');setView('confirm');
+  }
+  async function discardCount() {
+    const cancelled=await request('discardCount',{workEffortId});
+    if(!active.current)return;
+    setInfo(cancelled);setProgress(null);setCompletionMessage('Cycle count discarded');setView('summary');
   }
   const canManage=info?.canComplete&&info.statusId==='CYCLE_CNT_IN_PRGS';
-  const hasStarted=info&&info.statusId!=='CYCLE_CNT_CREATED';
+  const dynamic=info?.type==='DYNAMIC_COUNT';
   const canEditContribution=canManage&&contribution?.editable;
   const zeroItems=progress?.items.filter(item=>item.isRequested&&item.quantity===null)||[];
   const extras=progress?.items.filter(item=>!item.isRequested&&item.quantity!==null&&item.decision!=='SKIPPED')||[];
   const reviewItems=useMemo(()=>progress?.items.filter(item=>selected.has(item.productId))||[],[progress,selected]);
   const summaryItems=useMemo(()=>progress?.items.filter(item=>item.decision!=='SKIPPED')||[],[progress]);
-  const countedProducts=summaryItems.filter(item=>item.quantity!=null).length;
-  const countingSessions=info?.sessions.filter(session=>['SESSION_CREATED','SESSION_ASSIGNED'].includes(session.statusId)).length||0;
-  const returnTo=()=>{setError('');setView(view==='editContribution'?'product':view==='confirm'&&decision!=='completeCount'?(decision==='confirmZero'?'zero':'extras'):'summary');if(['sessions','create'].includes(view))run(()=>refresh());};
-  const backLabel=view==='summary'?'All counts':view==='editContribution'?'Product details':view==='confirm'&&decision!=='completeCount'?(decision==='confirmZero'?'Uncounted products':'Extra products'):'Count summary';
+  const backView=view==='editContribution'?'product'
+    :view==='confirm'&&decision!=='completeCount'?(decision==='confirmZero'?'zero':'extras')
+    :['product','zero','extras'].includes(view)?'products':'summary';
+  const backLabel={product:'Product details',products:'Products',zero:'Uncounted products',extras:'Extra products',summary:'Count summary'}[backView];
+  function returnTo() {
+    setError('');setView(backView);
+    if(view==='completed')setSessionPage(0);
+    if(view==='create')void run(()=>refresh());
+  }
+  const sessionsList=info&&<>
+    <DividedRows>{pageSessions.map(session=><ActionRow key={session.sessionId} title={session.name||session.sessionId}
+      detail={[info.areas.find(area=>area.id===session.area)?.name||session.area,session.mine?'You':session.operator].filter(Boolean).join(' · ')}
+      {...lockStatus(session.sessionId)} meta={countStatus(session)} disabled={busy} onClick={()=>openSession(session.sessionId,session.name)}/>)}</DividedRows>
+    <CompactPager page={visiblePage} pages={Math.max(1,Math.ceil(visibleSessions.length/20))} total={visibleSessions.length} label="sessions" onPage={setSessionPage} disabled={busy}/>
+  </>;
   return <s-scroll-box key={`${workEffortId}:${view}:${info?.statusId||'loading'}`}><s-box padding="large"><s-stack direction="block" gap="large">
-    <BackButton loading={busy} disabled={busy} onClick={view==='summary'?back:returnTo}>{backLabel}</BackButton>
+    {view!=='summary'&&<BackButton loading={busy} disabled={busy} onClick={returnTo}>{backLabel}</BackButton>}
+    {!info&&busy&&<s-spinner accessibilityLabel="Loading count summary"/>}
+    {navigationError&&<s-banner tone="warning" heading={navigationError}/>}
     {error&&<s-banner tone="critical" heading={error}/>}{decisionProgress&&<s-text>{decisionProgress}</s-text>}
     {!info&&error&&<s-button variant="primary" onClick={()=>run(()=>refresh())}>Try again</s-button>}
     {info&&view==='summary'&&<>
-      {completionMessage&&<s-banner tone="success" heading={completionMessage}/>}
-      <s-stack direction="block" gap="small">
-        <s-text color="subdued">{countTypeName(info.type)} · {workStatus(info.statusId)}</s-text>
-        {(info.startDate||info.dueDate)&&<s-text color="subdued">{[info.startDate&&`Starts ${new Date(Number(info.startDate)).toLocaleDateString()}`,info.dueDate&&`Due ${new Date(Number(info.dueDate)).toLocaleDateString()}`].filter(Boolean).join(' · ')}</s-text>}
-        {info.canStart&&<s-button variant="primary" disabled={busy} onClick={()=>run(startCounting)}>Start counting</s-button>}
-        {!info.canStart&&entry.view!=='summary'&&<s-button variant="primary" disabled={busy} onClick={()=>run(()=>enterCounting())}>{entry.view==='session'?'Resume counting':entry.view==='sessions'?'Choose session':'Start a session'}</s-button>}
+      <s-stack direction="block" gap="base">
+        {canManage&&<s-button variant="primary" disabled={busy} onClick={()=>run(reviewApproval)}>Submit for approval</s-button>}
+        {info.canStart&&<s-button variant="primary" disabled={busy} onClick={()=>run(startCounting)}>Start count</s-button>}
       </s-stack>
-      {info.canPreview&&<s-section heading="Progress"><s-box slot="secondary-actions" inlineSize="24px" blockSize="24px">{progressBusy&&<s-spinner accessibilityLabel="Updating count progress"/>}</s-box><s-stack direction="block" gap="base">
-        <s-stack direction="inline" gap="large" justifyContent="start">
-          <s-stack direction="block" gap="small"><s-heading>{progress?countedProducts:'—'}</s-heading><s-text color="subdued">Products counted</s-text></s-stack>
-          {!!progress?.uncounted&&<s-stack direction="block" gap="small"><s-heading>{progress.uncounted}</s-heading><s-text color="subdued">Uncounted</s-text></s-stack>}
-          <s-stack direction="block" gap="small"><s-heading>{progress?summaryItems.reduce((units,item)=>units+(item.quantity??0),0):'—'}</s-heading><s-text color="subdued">Units counted</s-text></s-stack>
-        </s-stack>
-      </s-stack></s-section>}
+      {completionMessage&&<s-banner tone="success" heading={completionMessage}/>}
       {info.statusId==='CYCLE_CNT_CMPLTD'&&<s-banner tone="success" heading="Sent to HotWax for approval"/>}
-      {canManage&&progress&&<s-stack direction="block" gap="small">
-        {progress.canFinish&&<s-button variant="primary" disabled={busy||progressBusy||!!progressError} onClick={()=>{setDecision('completeCount');setView('confirm');}}>Finish count</s-button>}
-        {!progress.canFinish&&progress.allSubmitted&&progress.uncounted>0&&<s-text color="subdued">{amount(progress.uncounted,'product')} still to check.</s-text>}
-      </s-stack>}
-      {hasStarted&&(info.sessions.length>0||info.canCreateSession)&&<s-stack direction="block" gap="base">
-        <s-divider/>
-        <s-section heading="Counting sessions"><s-stack direction="block" gap="base">
-          {(info.sessions.length>1||showSessions)&&<s-stack direction="block" gap="base">
-            {info.sessions.slice(sessionPage*20,(sessionPage+1)*20).map((session,index)=><s-stack key={session.sessionId} direction="block" gap="none">
-              {index>0&&<s-divider/>}
-              <ActionRow title={session.name||session.sessionId}
-                detail={`${info.areas.find(a=>a.id===session.area)?.name||session.area} · ${session.mine?'You':session.operator}`}
-                {...lockStatus(session.sessionId)} meta={countStatus(session)} disabled={busy} onClick={()=>openSession(session.sessionId,undefined,session.name)}/>
-            </s-stack>)}
-            <CompactPager page={sessionPage} pages={Math.max(1,Math.ceil(info.sessions.length/20))} total={info.sessions.length} label="sessions" onPage={setSessionPage} disabled={busy}/>
-            {lockError&&<s-text tone="critical">{lockError}</s-text>}
-          </s-stack>}
-          <s-stack direction="inline" gap="base">
-            {info.canCreateSession&&<s-button disabled={busy} onClick={()=>run(showCreate)}>Add a session</s-button>}
-            {info.sessions.length===1&&<s-button onClick={()=>setShowSessions(value=>!value)}>{showSessions?'Hide session':'Session details'}</s-button>}
-          </s-stack>
-        </s-stack></s-section>
-        <s-divider/>
-      </s-stack>}
-      <s-section heading="Products">
+      {(info.startDate||info.dueDate)&&<s-text color="subdued">{[info.startDate&&`Starts ${new Date(Number(info.startDate)).toLocaleDateString()}`,info.dueDate&&`Due ${new Date(Number(info.dueDate)).toLocaleDateString()}`].filter(Boolean).join(' · ')}</s-text>}
+      <s-section heading="Open sessions"><s-stack direction="block" gap="base">
+        {sessionsList}
+        {!openSessions.length&&<s-text color="subdued">No open sessions.</s-text>}
+        {lockError&&<s-text tone="critical">{lockError}</s-text>}
+        <s-stack direction="inline" gap="base">
+          {info.canCreateSession&&<s-button disabled={busy} onClick={()=>run(showCreate)}>Add session</s-button>}
+          {!!pastSessions.length&&<s-button disabled={busy} onClick={()=>{setSessionPage(0);setView('completed');}}>Session history</s-button>}
+        </s-stack>
+      </s-stack></s-section>
+      {/* Destructive, so kept apart from Submit at the end of the summary. It opens a confirmation view. */}
+      {info.canDiscard&&<s-stack direction="inline"><s-button variant="tertiary" tone="critical" disabled={busy} onClick={()=>{setError('');setView('discard');}}>Discard cycle count</s-button></s-stack>}
+    </>}
+    {info&&view==='discard'&&<>
+      <s-text>Discard {info.name} and all of its sessions? The counted quantities will be excluded from approval.</s-text>
+      <s-button tone="critical" variant="primary" loading={busy} onClick={()=>run(discardCount)}>Discard cycle count</s-button>
+    </>}
+    {info&&view==='completed'&&sessionsList}
+    {info&&view==='products'&&
+      <s-stack direction="block" gap="base">
+        {completionMessage&&<s-banner tone="success" heading={completionMessage}/>}
         {progressError&&<s-banner tone="critical" heading={progressError}/>}
         {info.canPreview?<s-stack direction="block" gap="base">
-          {progress?<ProductList items={summaryItems} countExtras directed={info.type==='DIRECTED_COUNT'} disabled={busy} memory={listMemory.current} onSelect={showProduct}
+          {progress?<ProductList items={summaryItems} filters={!dynamic} countExtras directed={info.type==='DIRECTED_COUNT'} disabled={busy} memory={listMemory.current} onSelect={showProduct}
             renderViewActions={tab=>canManage&&((tab==='uncounted'&&zeroItems.length>0)?<s-stack direction="block" gap="small">
               <s-button disabled={busy||progressBusy||!progress.allSubmitted} onClick={()=>{setSelected(new Set());setCompletionMessage('');setView('zero');}}>Mark as out of stock</s-button>
               {!progress.allSubmitted&&<s-text color="subdued">Submit all sessions before marking remaining products as out of stock.</s-text>}
             </s-stack>:tab==='undirected'&&extras.length>0&&<s-button disabled={busy||progressBusy||!progress.allSubmitted} onClick={()=>{setSelected(new Set());setCompletionMessage('');setView('extras');}}>Select products to discard</s-button>)}/>:<s-text color="subdued">{progressBusy?'Loading products…':'Products could not be loaded.'}</s-text>}
-          <s-button disabled={busy||progressBusy} onClick={()=>run(()=>refresh())}>{progressError?'Retry product summary':'Refresh summary'}</s-button>
+          <s-button disabled={busy||progressBusy} onClick={loadProducts}>{progressError?'Retry products':'Refresh products'}</s-button>
         </s-stack>:<s-text color="subdued">Product preview is available when the count starts and your account has access.</s-text>}
-      </s-section>
-    </>}
-    {info&&view==='sessions'&&<s-stack direction="block" gap="base">
-      {availableSessions.slice(sessionPage*20,(sessionPage+1)*20).map((session,index)=><s-stack key={session.sessionId} direction="block" gap="none">
-        {index>0&&<s-divider/>}
-        <ActionRow title={session.name||session.sessionId}
-          detail={`${info.areas.find(a=>a.id===session.area)?.name||session.area} · ${session.mine?'You':session.operator}`}
-          {...lockStatus(session.sessionId)} meta={countStatus(session)} disabled={busy} onClick={()=>openSession(session.sessionId,undefined,session.name)}/>
-      </s-stack>)}
-      <CompactPager page={sessionPage} pages={Math.max(1,Math.ceil(availableSessions.length/20))} total={availableSessions.length} label="sessions" onPage={setSessionPage} disabled={busy}/>
-      {lockError&&<s-text tone="critical">{lockError}</s-text>}
-      {!availableSessions.length&&<s-text>No open sessions.</s-text>}
-      {info.canCreateSession&&<s-button disabled={busy} onClick={()=>run(showCreate)}>Add a session</s-button>}
-    </s-stack>}
+      </s-stack>}
     {info&&view==='create'&&<>
       <s-section><s-stack direction="block" gap="base">
         <s-text>Use a separate session for each person or area.</s-text>
         {pendingCreate&&<s-text color="subdued">An earlier attempt to start “{pendingCreate.name}” did not finish. Start counting to finish it, or change the name or location to start a different session.</s-text>}
         <s-text-field label="Session name" placeholder="For example, Front display" value={sessionName} disabled={busy} onInput={e=>{name.current=e.currentTarget.value;setSessionName(e.currentTarget.value);}}/>
+        {/* POS does not draw a choice list's label, so the heading is visible text. */}
         <s-text type="strong">Session location</s-text><s-choice-list values={[area]} onChange={e=>setArea(e.currentTarget.values[0])}>{info.areas.map(a=><s-choice key={a.id} value={a.id} disabled={busy}>{a.name}</s-choice>)}</s-choice-list>
       </s-stack></s-section>
       <s-button variant="primary" disabled={busy} onClick={()=>run(create)}>Start counting</s-button>
@@ -266,12 +279,12 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
     </>}
     {view==='confirm'&&<>
       <s-section heading={decision==='completeCount'?'Ready for approval':decision==='confirmZero'?'Mark these products as out of stock?':'Discard these extra products?'}><s-stack direction="block" gap="base">
-        <s-text>{decision==='completeCount'?`${amount(countedProducts,'product')} · ${amount(progress?.units||0,'unit')}`:`${selected.size} products selected. This decision is recorded in HotWax.`}</s-text>
+        <s-text>{decision==='completeCount'?`${amount(approval?.products||0,'product')} · ${amount(approval?.units||0,'unit')}`:`${selected.size} products selected. This decision is recorded in HotWax.`}</s-text>
         {decision==='confirmZero'&&<s-text>Each selected product will receive a count of zero and move from Uncounted to Counted.</s-text>}
         <s-text color="subdued">Inventory changes only after approval.</s-text>
         {decision==='completeCount'&&info?.type==='DYNAMIC_COUNT'&&<s-text type="strong">Include all units of each listed product, including back stock.</s-text>}
       </s-stack></s-section>
-      <s-button variant="primary" disabled={busy||(decision!=='completeCount'&&!selected.size)} onClick={()=>run(confirm)}>{decision==='completeCount'?'Send for approval':decision==='confirmZero'?'Confirm out of stock':'Discard selected products'}</s-button>
+      <s-button variant="primary" disabled={busy||(decision!=='completeCount'&&!selected.size)} onClick={()=>run(confirm)}>{decision==='completeCount'?'Submit for approval':decision==='confirmZero'?'Confirm out of stock':'Discard selected products'}</s-button>
       {savedDecision&&decision!=='completeCount'&&<s-button disabled={busy} onClick={()=>run(cancelDecision)}>Cancel saved decision</s-button>}
       {decision!=='completeCount'&&<ProductList items={reviewItems} filters={false}/>}
     </>}
@@ -279,7 +292,7 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
       <s-text>{product.sku} · {product.quantity==null?'Not counted':`${product.quantity} counted in total`}</s-text>
       {product.onHand!=null&&<s-text color="subdued">On hand {product.onHand} · Difference {product.delta??'—'}</s-text>}
       <s-text type="strong">Session contributions</s-text>
-      {contributions?.slice(page*20,(page+1)*20).map(session=><ActionRow key={session.sessionId} title={session.name||session.sessionId} detail={`${session.operator} · ${countStatus(session)}`} meta={session.quantity==null?'Uncounted':String(session.quantity)} disabled={busy} onClick={()=>{setContribution(session);setContributionQuantity(session.quantity==null?'':String(session.quantity));setView('editContribution');}}/>)}
+      <DividedRows>{contributions?.slice(page*20,(page+1)*20).map(session=><ActionRow key={session.sessionId} title={session.name||session.sessionId} detail={`${session.operator} · ${countStatus(session)}`} meta={session.quantity==null?'Uncounted':String(session.quantity)} disabled={busy} onClick={()=>{setContribution(session);setContributionQuantity(session.quantity==null?'':String(session.quantity));setView('editContribution');}}/>)}</DividedRows>
       {contributions?.length===0&&<s-text color="subdued">No session has counted this product yet.</s-text>}
       {!contributions&&(busy?<s-text color="subdued">Loading session contributions…</s-text>:<s-button onClick={()=>showProduct(product)}>Retry contributions</s-button>)}
       {contributions&&<CompactPager page={page} pages={Math.max(1,Math.ceil(contributions.length/20))} total={contributions.length} onPage={setPage} label="sessions"/>}
@@ -304,7 +317,7 @@ export function CountFlow({workEffortId,openSession,back,storage,owner,request,s
         const updated=await request('progress',{workEffortId});setInfo(updated);setProgress(updated);setProduct(updated.items.find(i=>i.productId===product.productId));
         const result=await request('contributions',{workEffortId,productId:product.productId});setContributions(result.items);setView('product');
       })}>Save contribution</s-button>}
-      <s-button disabled={busy} onClick={()=>openSession(contribution.sessionId,undefined,contribution.name)}>View session</s-button>
+      <s-button disabled={busy} onClick={()=>openSession(contribution.sessionId,contribution.name)}>View session</s-button>
     </>}
   </s-stack></s-box></s-scroll-box>;
 }

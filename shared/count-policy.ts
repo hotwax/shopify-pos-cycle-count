@@ -21,6 +21,7 @@ export function countCapabilities(permissionIds: Iterable<string>) {
     canRelease: admin || permissions.has("INV_COUNT_LOCK_RLS"),
     canPrestart: admin || permissions.has("INV_COUNT_PRE_START"),
     canSubmit: admin || permissions.has("INV_COUNT_SUBMIT"),
+    canDiscard: admin,
     canViewOnHand: admin || permissions.has("INV_CNT_VIEW_QOH"),
   };
 }

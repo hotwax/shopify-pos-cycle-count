@@ -16,5 +16,5 @@ function CountTile() {
   },[]);
   const fresh=status&&Date.now()-status.at<120000;
   const subtitle=!fresh?'Count store inventory':status.state==='attention'?'Scans need attention':status.state==='locked'?'Session open on another register':status.state==='offline'?`${status.pending||0} saved · offline`:status.pending?`${status.pending} changes syncing`:status.state==='submitted'?'Session submitted':status.state==='counting'?`Resume ${status.name||'counting'}`:'All quantities synced';
-  return <s-tile heading={DEVELOPMENT_PREVIEW?'Cycle Count (local)':'Cycle count'} subheading={subtitle} onClick={()=>shopify.action.presentModal()}/>;
+  return <s-tile heading={DEVELOPMENT_PREVIEW?'Cycle count (local)':'Cycle count'} subheading={subtitle} onClick={()=>shopify.action.presentModal()}/>;
 }
