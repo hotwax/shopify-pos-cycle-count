@@ -5,6 +5,7 @@ import {ActionRow,DividedRows,amount} from './FlowParts.jsx';
 import {recoverSubmission,countSubmitted} from './count-submission';
 import {controlFor} from './count-control';
 import {progressTotals,submitReadiness} from './count-totals';
+import {layout} from './layout';
 // Totals for the Progress section plus whether Submit for approval can be used, from one progress result.
 const summarize=result=>({...progressTotals(result),...submitReadiness(result)});
 const operationId=()=>Array.from({length:15},()=>Math.floor(Math.random()*16).toString(16)).join('');
@@ -260,7 +261,7 @@ export function CountFlow({workEffortId,screen='summary',product:initialProduct,
   const sessionRow=session=>{
     const lock=lockStatus(session.sessionId),continuing=session.editable&&session.mine&&!lock.notice;
     return <s-box key={session.sessionId} paddingBlock="base" minBlockSize="64px">
-      <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
+      <s-stack direction={layout.compact?'block':'inline'} justifyContent="space-between" alignItems={layout.compact?'stretch':'center'} gap="base">
         <s-stack direction="block" gap="small">
           <s-text type="strong">{session.name||session.sessionId}</s-text>
           <s-text color="subdued">{[info.areas.find(area=>area.id===session.area)?.name||session.area,session.mine?'You':session.operator,countStatus(session)].filter(Boolean).join(' · ')}</s-text>

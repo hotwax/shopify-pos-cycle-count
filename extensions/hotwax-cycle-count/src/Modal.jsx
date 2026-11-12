@@ -5,8 +5,9 @@ import {currentCountOwner} from './count-api';
 import {CountWorkspace} from './CountWorkspace.jsx';
 import {readCountPage} from './count-navigation';
 import {DEVELOPMENT_PREVIEW} from '../../../shared/oms-build-config';
+import {readLayout} from './layout';
 
-export default () => render(<CountExtension entry={navigation.currentEntry}/>,document.body);
+export default async () => {await readLayout();render(<CountExtension entry={navigation.currentEntry}/>,document.body);};
 function CountExtension({entry}) {
   const [owner,setOwner]=useState(currentCountOwner()),[header,setHeader]=useState({heading:'Cycle count',subheading:'',action:null});
   useEffect(()=>{

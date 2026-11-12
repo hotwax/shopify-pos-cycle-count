@@ -12,6 +12,7 @@ import {CatalogPicker} from './CatalogPicker.jsx';
 import {ProductList,CompactPager} from './ProductList.jsx';
 import {ActionRow,DividedRows,amount} from './FlowParts.jsx';
 import {ProductRow} from './ProductRow.jsx';
+import {layout} from './layout';
 import {HidBarcodeEntry} from './CountInputs.jsx';
 import {ScanEventRow} from './ScanEventRow.jsx';
 import {ScanFeedback} from './ScanFeedback.jsx';
@@ -614,7 +615,7 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
           <s-button variant="tertiary" disabled={busy} command="--show" commandFor="session-options">More</s-button>
         </s-stack>
         {/* One status line, the scanner state, and the lock only when it needs attention. */}
-        <s-stack direction="inline" gap="base" alignItems="center">
+        <s-stack direction={layout.compact?'block':'inline'} gap={layout.compact?'small':'base'} alignItems={layout.compact?'start':'center'}>
           <s-text color="subdued" tone={syncError?'critical':'auto'}>{`${progressText} · ${saveText}`}</s-text>
           {/* Scanner state in both cases: staff who scan check this first when a scan does nothing. */}
           <s-badge tone={posScannerConnected?'success':'neutral'}>{posScannerConnected?'Scanner connected':'Scanner not connected'}</s-badge>
