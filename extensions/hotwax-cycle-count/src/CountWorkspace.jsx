@@ -551,6 +551,9 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
     onQuantity={count.editable?changeQuantity:undefined} onQuantityInput={editQuantity} disabled={busy||(count.editable&&!canCount)} search={searchMembers} onVisible={hydrateRows} findMore={count.editable&&connected?findMore:undefined}/>;
   return <>
     <s-scroll-box key={`${route}:${count?.sessionId||'home'}`}><s-box padding="large"><s-stack direction="block" gap="large">
+      {/* Page content and the product tabs sit in fixed containers, so POS keeps them in this
+          order when content inside them appears or changes (it can append late siblings last). */}
+      <s-stack direction="block" gap="large">
       {count&&count.name!==count.countName&&isSessionDetail&&<s-text color="subdued">{count.countName}</s-text>}
       {error&&<s-banner tone="critical" heading={error}/>}
       {count?.editable&&!canCount&&route!=='forceRelease'&&<s-banner tone="critical" heading={lockedElsewhere?'Open on another register':'Counting paused'}>
@@ -666,6 +669,8 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
         </>:<s-stack direction="inline"><s-button variant="primary" disabled={busy} onClick={()=>void finishTool()}>Done</s-button></s-stack>}
       </>}
 
+      </s-stack>
+      <s-box>
       {count&&isSessionDetail&&(count.items.length>0||count.editable)&&<s-tabs value={sessionTab} onChange={e=>selectSessionTab(e.currentTarget.value)}>
         <s-tab-list>{tabs.map(([id,label])=><s-tab key={id} controls={id}>{label}</s-tab>)}</s-tab-list>
         {tabs.map(([id])=><s-tab-panel key={id} id={id}>
@@ -673,6 +678,7 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
         </s-tab-panel>)}
       </s-tabs>}
 
+      </s-box>
       {/* Each group is its own container: POS can reorder siblings that follow a conditional group. */}
       {count&&isSessionDetail&&<s-modal id="session-options" heading="Session options">
         <s-stack direction="block" gap="base">

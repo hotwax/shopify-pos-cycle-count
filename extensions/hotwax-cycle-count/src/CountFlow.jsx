@@ -4,7 +4,9 @@ import {ProductList,CompactPager} from './ProductList.jsx';
 import {ActionRow,DividedRows,amount} from './FlowParts.jsx';
 import {recoverSubmission,countSubmitted} from './count-submission';
 import {controlFor} from './count-control';
-import {progressTotals} from './count-totals';
+import {progressTotals,submitReadiness} from './count-totals';
+// Totals for the Progress section plus whether Submit for approval can be used, from one progress result.
+const summarize=result=>({...progressTotals(result),...submitReadiness(result)});
 const operationId=()=>Array.from({length:15},()=>Math.floor(Math.random()*16).toString(16)).join('');
 const sameProducts=(a,b)=>[...a].sort().join(',')===[...b].sort().join(',');
 // The last product summary per count, shown at once while a fresh one loads.
@@ -36,7 +38,7 @@ export function CountFlow({workEffortId,screen='summary',product:initialProduct,
   const [progressBusy,setProgressBusy]=useState(false),[progressError,setProgressError]=useState(''),[sessionPage,setSessionPage]=useState(0),[pastPage,setPastPage]=useState(0);
   const [locks,setLocks]=useState({}),[lockError,setLockError]=useState(''),[lockRefresh,setLockRefresh]=useState(0);
   const listMemory=useRef({search:'',view:'all',page:0});
-  const [totals,setTotals]=useState(()=>{const cached=progressCache.get(cacheKey);return cached?progressTotals(cached):null;});
+  const [totals,setTotals]=useState(()=>{const cached=progressCache.get(cacheKey);return cached?summarize(cached):null;});
   const [totalsError,setTotalsError]=useState(''),totalsRequest=useRef(0);
   const decision=view==='zero'?'confirmZero':'discardUndirected';
   async function run(fn) {
@@ -52,7 +54,7 @@ export function CountFlow({workEffortId,screen='summary',product:initialProduct,
     const sequence=++totalsRequest.current;setTotalsError('');
     try {
       const result=await request('progress',{workEffortId,compact:true});
-      if(active.current&&sequence===totalsRequest.current)setTotals(progressTotals(result));
+      if(active.current&&sequence===totalsRequest.current)setTotals(summarize(result));
     } catch {
       if(active.current&&sequence===totalsRequest.current)setTotalsError('Progress could not be loaded.');
     }
@@ -65,7 +67,7 @@ export function CountFlow({workEffortId,screen='summary',product:initialProduct,
       if(!active.current||sequence!==progressRequest.current)return;
       progressCache.delete(cacheKey);progressCache.set(cacheKey,result);
       while(progressCache.size>10)progressCache.delete(progressCache.keys().next().value);
-      setInfo(result);setProgress(result);setTotals(progressTotals(result));
+      setInfo(result);setProgress(result);setTotals(summarize(result));
     } catch(failure) {
       if(active.current&&sequence===progressRequest.current)setProgressError(failure instanceof Error?failure.message:'Could not load the product summary.');
     } finally {if(active.current&&sequence===progressRequest.current)setProgressBusy(false);}
@@ -223,7 +225,7 @@ export function CountFlow({workEffortId,screen='summary',product:initialProduct,
     try {
       const result=await request('progress',{workEffortId,compact:true});
       if(!active.current)return;
-      setTotals(progressTotals(result));
+      setTotals(summarize(result));
       if(!result.canFinish){setSheetError(result.uncounted
         ?'Open Products to count or confirm zero for the remaining products.'
         :'Complete at least one session before submitting this count.');return;}
@@ -251,9 +253,21 @@ export function CountFlow({workEffortId,screen='summary',product:initialProduct,
   const zeroItems=progress?.items.filter(item=>item.isRequested&&item.quantity===null)||[];
   const extras=progress?.items.filter(item=>!item.isRequested&&item.quantity!==null&&item.decision!=='SKIPPED')||[];
   const summaryItems=useMemo(()=>progress?.items.filter(item=>item.decision!=='SKIPPED')||[],[progress]);
-  const sessionRow=session=><ActionRow key={session.sessionId} title={session.name||session.sessionId}
-    detail={[info.areas.find(area=>area.id===session.area)?.name||session.area,session.mine?'You':session.operator].filter(Boolean).join(' · ')}
-    {...lockStatus(session.sessionId)} meta={countStatus(session)} disabled={busy} onClick={()=>openSession(session.sessionId,session.name)}/>;
+  // Each session says what its button does: continue your own open session, open someone
+  // else's, or view a finished one. The whole row was tappable, but nothing showed it.
+  const sessionRow=session=>{
+    const lock=lockStatus(session.sessionId),continuing=session.editable&&session.mine&&!lock.notice;
+    return <s-box key={session.sessionId} paddingBlock="base" minBlockSize="64px">
+      <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
+        <s-stack direction="block" gap="small">
+          <s-text type="strong">{session.name||session.sessionId}</s-text>
+          <s-text color="subdued">{[info.areas.find(area=>area.id===session.area)?.name||session.area,session.mine?'You':session.operator,countStatus(session)].filter(Boolean).join(' · ')}</s-text>
+          {lock.notice&&<s-text tone="critical">{lock.notice}</s-text>}
+        </s-stack>
+        <s-button variant={continuing?'primary':'secondary'} disabled={busy} onClick={()=>openSession(session.sessionId,session.name)}>{continuing?'Continue counting':session.editable?'Open':'View'}</s-button>
+      </s-stack>
+    </s-box>;
+  };
   return <s-scroll-box key={`${workEffortId}:${view}:${info?.statusId||'loading'}`}><s-box padding="large"><s-stack direction="block" gap="large">
     {!info&&busy&&<s-spinner accessibilityLabel="Loading count"/>}
     {navigationError&&<s-banner tone="warning" heading={navigationError}/>}
@@ -266,18 +280,32 @@ export function CountFlow({workEffortId,screen='summary',product:initialProduct,
         <s-button slot="primary-action" onClick={()=>openScreen(pendingDecision.action==='confirmZero'?'zero':'extras')}>Continue</s-button>
       </s-banner>}
       <s-stack direction="block" gap="base">
-        {canManage&&<s-button variant="primary" disabled={busy} command="--show" commandFor="count-submit" onClick={()=>void prepareSubmission()}>Submit for approval</s-button>}
+        {/* Disabled until the count can be sent, with what is still missing underneath. If the
+            check cannot load, the button stays usable and the sheet checks again on tap. */}
+        {canManage&&<s-stack direction="block" gap="small">
+          <s-button variant="primary" disabled={busy||(!totals&&!totalsError)||!!totals&&!totals.ready} command="--show" commandFor="count-submit" onClick={()=>void prepareSubmission()}>{!totals&&!totalsError?'Checking…':'Submit for approval'}</s-button>
+          {totals&&!totals.ready&&<s-stack direction="block" gap="none">
+            <s-text color="subdued">Before submitting:</s-text>
+            {totals.missing.map(step=><s-text key={step}>• {step}</s-text>)}
+          </s-stack>}
+        </s-stack>}
         {info.canStart&&<s-button variant="primary" disabled={busy} onClick={()=>run(startCounting)}>Start count</s-button>}
       </s-stack>
       {info.statusId==='CYCLE_CNT_CMPLTD'&&<s-banner tone="success" heading="Sent to HotWax for approval"/>}
       {info.statusId==='CYCLE_CNT_CNCL'&&<s-banner tone="warning" heading="This cycle count was discarded"/>}
       {(info.startDate||info.dueDate)&&<s-text color="subdued">{[info.startDate&&`Starts ${new Date(Number(info.startDate)).toLocaleDateString()}`,info.dueDate&&`Due ${new Date(Number(info.dueDate)).toLocaleDateString()}`].filter(Boolean).join(' · ')}</s-text>}
+      {/* Progress opens Products, where each product's count and sessions are listed. */}
       {showTotals&&<s-section heading="Progress"><s-stack direction="block" gap="small">
-        {totals?<>
-          <s-text type="strong">{totals.dynamic?`${amount(totals.counted,'product')} counted`:`${totals.requestedCounted} of ${amount(totals.requested,'product')} counted`} · {amount(totals.units,'unit')}</s-text>
-          {!totals.dynamic&&<s-text>{totals.requested>totals.requestedCounted?`${amount(totals.requested-totals.requestedCounted,'product')} left to count`:'Every requested product is counted'}{totals.extras?` · ${amount(totals.extras,'extra product')}`:''}</s-text>}
-          <s-text color="subdued">From quantities saved in all sessions.</s-text>
-        </>:totalsError?<s-stack direction="inline" gap="base" alignItems="center">
+        {totals?<s-clickable onClick={()=>openScreen('products')}>
+          <s-stack direction="inline" justifyContent="space-between" alignItems="center" gap="base">
+            <s-stack direction="block" gap="small">
+              <s-text type="strong">{totals.dynamic?`${amount(totals.counted,'product')} counted`:`${totals.requestedCounted} of ${amount(totals.requested,'product')} counted`} · {amount(totals.units,'unit')}</s-text>
+              {!totals.dynamic&&<s-text>{totals.requested>totals.requestedCounted?`${amount(totals.requested-totals.requestedCounted,'product')} left to count`:'Every requested product is counted'}{totals.extras?` · ${amount(totals.extras,'extra product')}`:''}</s-text>}
+              <s-text color="subdued">From quantities saved in all sessions. Tap to see products.</s-text>
+            </s-stack>
+            <s-icon type="chevron-right"/>
+          </s-stack>
+        </s-clickable>:totalsError?<s-stack direction="inline" gap="base" alignItems="center">
           <s-text color="subdued">{totalsError}</s-text>
           <s-button variant="tertiary" onClick={()=>void loadTotals()}>Try again</s-button>
         </s-stack>:<s-text color="subdued">Loading progress…</s-text>}
