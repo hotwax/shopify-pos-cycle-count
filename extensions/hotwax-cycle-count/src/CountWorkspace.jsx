@@ -66,6 +66,7 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
   const {storage,request,control,identity}=services.current;
   // reattachTarget: the session this screen let go of while a session task is open above it.
   // popOnReturn: this screen's work is done, so it closes when the screen above it does.
+  const [openingNote,setOpeningNote]=useState('');
   const reattachTarget=useRef(null),popOnReturn=useRef(false),returning=useRef(false),[compared,setCompared]=useState(false);
   const engine=useRef(null),ownership=useRef(null),alive=useRef(true),running=useRef(false),gate=useRef(false),latest=useRef(null),context=useRef(null);
   // Journal access waits for the background uploader; showing counts does not.
@@ -140,7 +141,10 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
     } catch {
       if(own())setError('Shopify POS could not open the page. Try again.');
       return false;
-    } finally {navigating.current=false;}
+    } finally {
+      // navigate() resolves before the transition ends; ignore taps until the new screen is up.
+      setTimeout(()=>{navigating.current=false;},1200);
+    }
   }
   function open(sessionId,name='') {
     return openPage(COUNT_SESSION,{sessionId,name,fromSummary:route==='work'});
@@ -176,7 +180,10 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
   }
   async function attach(result,claimed=undefined,signal=undefined,keepView=false) {
     const step=work=>abortable(work,signal);
-    await step(()=>foreground.current);
+    // Another Cycle count screen on this register may still hold this session's journal.
+    const held=setTimeout(()=>{if(own())setOpeningNote('This session is still open in another Cycle count screen on this register. Close that screen to continue here.');},10000);
+    try {await step(()=>foreground.current);} finally {clearTimeout(held);}
+    if(own())setOpeningNote('');
     await step(settle);if(!own())return;
     quantityEdits.current=new CountQuantityEdits(writeQuantity);
     setStats(null);setLease(null);setLeaseProblem('');setShowLockDetails(false);setSyncError('');setConflicts([]);setLastSynced(null);
@@ -395,7 +402,8 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
   useEffect(()=>{
     if(page.kind!=='work') {
       // Converting control first frees the legacy status key even on a full register.
-      foreground.current=control.read(true).catch(()=>{}).then(()=>enterForeground(shopify.storage,owner));
+      // The screen just opened is the visible one: a claim that stopped renewing belongs to a closed screen.
+      foreground.current=control.read(true).catch(()=>{}).then(()=>enterForeground(shopify.storage,owner,{takeOverStale:true}));
       foreground.current.catch(()=>{});
     }
     (async()=>{
@@ -562,7 +570,7 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
       {!connected&&<s-banner tone="warning" heading="Offline">{canCount?'Keep counting. Scans are saved on this terminal and match and sync after reconnecting.':'Saved sessions are available. Sessions this terminal already holds can keep counting; sync resumes after reconnecting.'}</s-banner>}
       {route==='opening'&&<s-section heading={opening?.name||'Session'}><s-stack direction="block" gap="base">
         <s-text>{busy?'Opening session…':reattachTarget.current?'This session is ready to continue.':'The session could not be opened.'}</s-text>
-        {busy?<s-text color="subdued">Loading saved quantities and checking session access.</s-text>
+        {busy?<s-text color={openingNote?'auto':'subdued'} tone={openingNote?'critical':'auto'}>{openingNote||'Loading saved quantities and checking session access.'}</s-text>
           :reattachTarget.current?<s-stack direction="inline"><s-button variant="primary" onClick={()=>void reattach()}>Continue counting</s-button></s-stack>
           :<s-button variant="primary" onClick={()=>loadSession(opening.sessionId,opening.name)}>Try again</s-button>}
       </s-stack></s-section>}
@@ -596,17 +604,20 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
       </>}
 
       {count&&route==='count'&&<s-stack direction="block" gap="large">
-        {canCount&&((last&&last.source!=='correction')||posScannerConnected||hidMode)&&<ScanFeedback last={last?.source==='correction'?null:last} hidMode={hidMode}/>}
+        {/* The last scanned product, with its count, stays in view for staff who are scanning. */}
+        {canCount&&<ScanFeedback last={last?.source==='correction'?null:last} hidMode={hidMode}/>}
+        {canCount&&<s-divider/>}
         {emptySession&&<s-banner tone="info" heading="Count your first product">{cameraAvailable||posScannerConnected||hidMode?'Scan a barcode, or search below and enter a quantity.':'Search below for a product and enter its quantity.'}</s-banner>}
         {/* POS allows one header button (Complete session), so More stays here as the quietest action. */}
         <s-stack direction="inline" gap="base">
           {cameraAvailable&&<s-button variant="primary" disabled={busy||!canCount} onClick={scanWithCamera}>Scan with camera</s-button>}
           <s-button variant="tertiary" disabled={busy} command="--show" commandFor="session-options">More</s-button>
         </s-stack>
-        {/* One status line; badges appear only for a connected scanner or a lock that needs attention. */}
+        {/* One status line, the scanner state, and the lock only when it needs attention. */}
         <s-stack direction="inline" gap="base" alignItems="center">
           <s-text color="subdued" tone={syncError?'critical':'auto'}>{`${progressText} · ${saveText}`}</s-text>
-          {posScannerConnected&&<s-badge tone="success">Scanner connected</s-badge>}
+          {/* Scanner state in both cases: staff who scan check this first when a scan does nothing. */}
+          <s-badge tone={posScannerConnected?'success':'neutral'}>{posScannerConnected?'Scanner connected':'Scanner not connected'}</s-badge>
           {lockTone!=='success'&&<s-badge tone={lockTone}>{lockLabel}</s-badge>}
         </s-stack>
         {hidMode&&<HidBarcodeEntry key={count.sessionId} disabled={busy||!canCount} add={enqueue}/>}
@@ -671,12 +682,12 @@ export function CountWorkspace({owner,page,entryKey,setHeader}) {
 
       </s-stack>
       <s-box>
-      {count&&isSessionDetail&&(count.items.length>0||count.editable)&&<s-tabs value={sessionTab} onChange={e=>selectSessionTab(e.currentTarget.value)}>
+      {count&&isSessionDetail&&(count.items.length>0||count.editable)&&<s-stack direction="block" gap="large"><s-divider/><s-tabs value={sessionTab} onChange={e=>selectSessionTab(e.currentTarget.value)}>
         <s-tab-list>{tabs.map(([id,label])=><s-tab key={id} controls={id}>{label}</s-tab>)}</s-tab-list>
         {tabs.map(([id])=><s-tab-panel key={id} id={id}>
           {sessionTab===id&&(id==='scans'?scanHistoryList:sessionProducts(id))}
         </s-tab-panel>)}
-      </s-tabs>}
+      </s-tabs></s-stack>}
 
       </s-box>
       {/* Each group is its own container: POS can reorder siblings that follow a conditional group. */}

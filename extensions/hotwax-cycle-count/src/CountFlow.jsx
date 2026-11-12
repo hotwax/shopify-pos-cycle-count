@@ -13,6 +13,8 @@ const sameProducts=(a,b)=>[...a].sort().join(',')===[...b].sort().join(',');
 const progressCache=new Map();
 const toast=message=>{try{shopify.toast?.show?.(message);}catch{/* A missing toast is not an error. */}};
 const message=failure=>failure instanceof Error?failure.message:'Could not complete this operation.';
+// A count's start and due moments with their time, in this register's own time zone and locale.
+const dateTime=value=>new Date(Number(value)).toLocaleString(undefined,{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});
 const HEADINGS={products:'Products',zero:'Mark as out of stock',extras:'Extra products'};
 
 /**
@@ -288,7 +290,7 @@ export function CountFlow({workEffortId,screen='summary',product:initialProduct,
       </s-stack>
       {info.statusId==='CYCLE_CNT_CMPLTD'&&<s-banner tone="success" heading="Sent to HotWax for approval"/>}
       {info.statusId==='CYCLE_CNT_CNCL'&&<s-banner tone="warning" heading="This cycle count was discarded"/>}
-      {(info.startDate||info.dueDate)&&<s-text color="subdued">{[info.startDate&&`Starts ${new Date(Number(info.startDate)).toLocaleDateString()}`,info.dueDate&&`Due ${new Date(Number(info.dueDate)).toLocaleDateString()}`].filter(Boolean).join(' · ')}</s-text>}
+      {(info.startDate||info.dueDate)&&<s-text color="subdued">{[info.startDate&&`Starts ${dateTime(info.startDate)}`,info.dueDate&&`Due ${dateTime(info.dueDate)}`].filter(Boolean).join(' · ')}</s-text>}
       {/* Progress opens Products, where each product's count and sessions are listed. */}
       {showTotals&&<s-section heading="Progress"><s-stack direction="block" gap="small">
         {totals?<s-clickable onClick={()=>openScreen('products')}>
