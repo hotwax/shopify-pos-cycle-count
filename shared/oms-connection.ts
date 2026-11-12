@@ -56,6 +56,8 @@ export function requireCountConnection(shop: string) {
 export type OmsIdentity = {shopifySessionToken: string; shopifyLocationId: unknown; signal?: AbortSignal;
   /** An OMS token from an earlier login in this POS runtime; it skips the app-bridge exchange. */
   omsToken?: string;
+  /** Supplies a current OMS token (renewing it when old) instead of a fixed omsToken. */
+  omsLogin?: () => Promise<string>;
   /** Read-phase budget. Large summaries may extend it; writes keep their own deadline. */
   readBudgetMs?: number};
 
@@ -135,7 +137,7 @@ export class OmsConnection {
   }
 
   private token(): Promise<string> {
-    return this.login ??= (async () => {
+    return this.login ??= this.identity.omsLogin ? this.identity.omsLogin() : (async () => {
       if (!this.identity.shopifySessionToken) throw new OmsLookupError("Shopify session token is unavailable.", 401);
       const login = await this.request("/rest/s1/app-bridge/login", {
         method: "POST", headers: {"Content-Type": "application/json"},

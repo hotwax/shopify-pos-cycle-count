@@ -1,8 +1,10 @@
 import {OmsConnection, OmsLookupError, rows, text, type OmsRow} from '../../../shared/oms-connection';
-import {inventoryConnection, type InventoryEvent, type InventoryLevel, type Location} from './Inventory';
+import {inventoryConnection, limited, shopifyRead as readShopify, type InventoryEvent, type InventoryLevel, type Location} from './Inventory';
+
+const shopifyRead = <T,>(oms: OmsConnection, shopId: string, queryText: string, variables: OmsRow) =>
+  readShopify<T>(oms,shopId,queryText,variables,'Shopify could not complete the POS order read.');
 
 const HOUR = 60 * 60 * 1000;
-const SHOPIFY_GRAPHQL = '/rest/s1/shopify/graphql';
 type Page<T> = {nodes: T[]; pageInfo: {hasNextPage: boolean; endCursor: string | null}};
 type Order = {id: string; name: string; createdAt: string; cancelledAt: string | null;
   sourceName: string; retailLocation: {id: string} | null};
@@ -12,13 +14,18 @@ type Assignment = {id: string; status: string; assignedLocation: {location: {id:
 type AssignedLine = {lineItem: {id: string}; totalQuantity: number; remainingQuantity: number};
 type SalesImpact = {atp: number; onHand: number};
 type StoreSale = {id: string; name: string; createdAt: number; cancelled: boolean; synced: boolean; impact: SalesImpact | null};
-export type StoreSales = {checkedAt: number; orders: StoreSale[]; pendingCount: number; impact: SalesImpact | null};
+export type StoreSales = {checkedAt: number; windowMs: number; orders: StoreSale[]; pendingCount: number; impact: SalesImpact | null};
+/** With the product's SKU, a day of POS orders: an import running hours behind still counts. */
+const SKU_WINDOW = 24 * HOUR;
 
+/** Shopify's quantities once every unsent change for this item is delivered, oldest batch first.
+ * A change whose delivery record was purged is left out and counted in `unknown`. */
 export function projectShopify(level: InventoryLevel, events: InventoryEvent[]) {
-  if (events.some(event=>event.state!=='Pending' && event.state!=='Queued')) {
-    throw new OmsLookupError('A batch is sending or needs attention.');
+  if (events.some(event=>event.state==='Sending' || event.state==='Error')) {
+    throw new OmsLookupError('A change for this product is being sent or needs attention, so the result after sync is not shown.');
   }
-  const pending = [...events].sort((a,b)=>{
+  const known = events.filter(event=>event.state==='Queued' || event.state==='Unbatched');
+  const pending = [...known].sort((a,b)=>{
     if (a.state!==b.state) return a.state==='Queued' ? -1 : 1;
     return a.state==='Queued' ? a.messageAt-b.messageAt : a.at-b.at;
   });
@@ -29,16 +36,7 @@ export function projectShopify(level: InventoryLevel, events: InventoryEvent[]) 
     available = event.reset ? event.delta : available===null ? null : available+change;
     if (onHand!==null) onHand += change;
   }
-  return {available,onHand};
-}
-
-async function shopifyRead<T>(oms: OmsConnection, shopId: string, queryText: string, variables: OmsRow) {
-  const result = await oms.postRead(SHOPIFY_GRAPHQL,{shopId,queryText,variables});
-  const response = result.response as OmsRow | undefined;
-  if (!response || (Array.isArray(response.errors) && response.errors.length)) {
-    throw new OmsLookupError('Shopify could not complete the POS order read.');
-  }
-  return response as T;
+  return {available,onHand,unknown:events.length-known.length};
 }
 
 async function readPages<T>(read: (after: string | null) => Promise<Page<T> | null | undefined>) {
@@ -60,10 +58,11 @@ async function readPages<T>(read: (after: string | null) => Promise<Page<T> | nu
   }
 }
 
-async function orderHeaders(oms: OmsConnection, location: Location, checkedAt: number) {
-  const from = new Date(checkedAt-HOUR).toISOString();
+async function orderHeaders(oms: OmsConnection, location: Location, checkedAt: number, windowMs: number, sku?: string) {
+  const from = new Date(checkedAt-windowMs).toISOString();
   const to = new Date(checkedAt).toISOString();
-  const filter = `source_name:pos location_id:${location.locationId} created_at:>='${from}' created_at:<='${to}'`;
+  const filter = `source_name:pos location_id:${location.locationId} created_at:>='${from}' created_at:<='${to}'`+
+    (sku ? ' sku:'+JSON.stringify(sku) : '');
   const orders = await readPages<Order>(async after=>{
     const response = await shopifyRead<{orders: Page<Order>}>(oms,location.shopId,
       `query StoreRecentPosOrders($filter: String!, $after: String) {
@@ -79,7 +78,7 @@ async function orderHeaders(oms: OmsConnection, location: Location, checkedAt: n
     const at = Date.parse(order.createdAt);
     if (!/^gid:\/\/shopify\/Order\/\d+$/.test(order.id) ||
         order.sourceName!=='pos' || order.retailLocation?.id!=='gid://shopify/Location/'+location.locationId ||
-        !Number.isFinite(at) || at<checkedAt-HOUR || at>checkedAt || verified.has(order.id)) {
+        !Number.isFinite(at) || at<checkedAt-windowMs || at>checkedAt || verified.has(order.id)) {
       throw new OmsLookupError('Shopify returned an order outside the requested store or time window.');
     }
     verified.set(order.id,order);
@@ -200,26 +199,29 @@ async function saleImpact(oms: OmsConnection, location: Location, id: string, va
   return {atp,onHand};
 }
 
-export async function recentStoreSales(location: Location, variantId: string | undefined, signal: AbortSignal, checkedAt=Date.now()): Promise<StoreSales> {
+export async function recentStoreSales(location: Location, variantId: string | undefined, signal: AbortSignal,
+  checkedAt=Date.now(), sku?: string): Promise<StoreSales> {
   if (!location.productStoreId) throw new OmsLookupError('The Shopify shop has no HotWax product store mapping.');
   const oms = inventoryConnection(location,signal,45000);
-  const orders = await orderHeaders(oms,location,checkedAt);
+  const windowMs = sku ? SKU_WINDOW : HOUR;
+  const orders = await orderHeaders(oms,location,checkedAt,windowMs,sku);
   const externalId = (order: Order) => order.id.split('/').at(-1)!;
   const lookups = [];
   for (let start = 0; start < orders.length; start += 50) {
     lookups.push(importedOrderIds(oms,location.productStoreId,orders.slice(start,start+50).map(externalId)));
   }
   const imported = new Set((await Promise.all(lookups)).flatMap(ids=>[...ids]));
-  const sales = await Promise.all(orders.map(async order=>{
+  // Each unimported order costs a few Shopify reads; keep only a few in flight.
+  const sales = await limited(orders,4,async order=>{
     const synced = imported.has(externalId(order));
     const cancelled = Boolean(order.cancelledAt);
     const impact = synced ? null : cancelled ? {atp:0,onHand:0} : variantId
       ? await saleImpact(oms,location,order.id,variantId).catch(()=>null) : null;
     return {id:order.id,name:order.name,createdAt:Date.parse(order.createdAt),cancelled,synced,impact};
-  }));
+  });
   const pending = sales.filter(order=>!order.synced);
   const impact = pending.reduce<SalesImpact | null>((total,order)=>total && order.impact ? {
     atp:total.atp+order.impact.atp,onHand:total.onHand+order.impact.onHand,
   } : null,{atp:0,onHand:0});
-  return {checkedAt,orders:sales,pendingCount:pending.length,impact};
+  return {checkedAt,windowMs,orders:sales,pendingCount:pending.length,impact};
 }

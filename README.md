@@ -113,8 +113,15 @@ The default `shopify.app.toml` still identifies the original HotWax app.
 
 The **Store inventory** tile (`extensions/hotwax-store-inventory`) reads the same App Home OMS
 address as Cycle count, so it works in any shop where this app is set up. It relies on the
-OMS's Shopify inventory ledger (`/rest/s1/sob/shopify/locationInventoryAdjustmentDetails`); confirm
-that service exists on the target OMS before releasing the tile to another shop.
+OMS's Shopify inventory ledger (`/rest/s1/sob/shopify/locationInventoryAdjustmentDetails`, an entity
+list from shopify-connector v4.4.0); confirm it exists on the target OMS before releasing the tile to
+another shop. It shows only the register's own store.
+
+**Send now** (deliver a product's waiting Shopify batches early) appears only for staff whose HotWax
+account has the `STORE_INV_PUSH` permission. The OMS does not define it: create the permission and
+grant it to a group for the staff who may send. Every Maarg login is in the ADMIN group, so an
+existing admin permission would let every associate send. The OMS send endpoint itself is not
+restricted by this permission.
 
 Use the named scripts so both build and deployment select the same sandbox configuration:
 
