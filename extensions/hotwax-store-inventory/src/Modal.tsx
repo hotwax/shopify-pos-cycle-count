@@ -3,10 +3,10 @@ import {render} from 'preact';
 import {useEffect, useRef, useState} from 'preact/hooks';
 import {inventoryScope, sameInventoryScope, type InventoryScope} from '../../../shared/store-inventory';
 import {
-  hotWaxInventoryLevel, hotWaxProductForVariant, inventoryEventSources, inventoryLevel, inventoryLocation,
+  hotWaxInventoryLevel, hotWaxProductForVariant, inventoryEventSources, inventoryLevel, inventoryLocation, inventorySyncSummary,
   productSyncEvents, proposedVariances, pushInventoryBatches, queuedInventoryBatches, recentInventoryEvents,
   searchInventory, shopifyVariantForHotWaxProduct,
-  type BatchProgress, type HotWaxLevel, type InventoryEvent, type ProposedVariance, type Variant,
+  type BatchProgress, type HotWaxLevel, type InventoryEvent, type InventorySyncSummary, type ProposedVariance, type Variant,
 } from './Inventory';
 import {eventSourceKey, type EventSource} from './InventoryEventSources';
 import {projectShopify, recentStoreSales, type StoreSales} from './InventoryProjection';
@@ -65,12 +65,23 @@ function eventTiming(event: InventoryEvent, now: number) {
   return age+' · '+syncTime;
 }
 
-export default () => {
+export default () => renderStoreInventory();
+
+export function renderStoreInventory(productContext?: {variantId?: number}) {
+  if (productContext) {
+    const {variantId} = productContext;
+    const selection: ProductPage | undefined =
+      typeof variantId==='number' && Number.isSafeInteger(variantId) && variantId>0
+        ? {owner:scopeKey(),product:{title:'',variantId:String(variantId)}}
+        : undefined;
+    render(<Extension screen={PRODUCT_SCREEN} state={selection}/>, document.body);
+    return;
+  }
   const entry = navigation.currentEntry;
   const url = entry?.url;
   const screen = url?.includes(PRODUCT_SCREEN) ? PRODUCT_SCREEN : url?.includes(SEARCH_SCREEN) ? SEARCH_SCREEN : undefined;
   render(<Extension screen={screen} state={entry?.getState()}/>, document.body);
-};
+}
 
 function Extension({screen,state}: {screen?: string; state: unknown}) {
   const [owner,setOwner] = useState(scopeKey);
@@ -188,8 +199,12 @@ function InventoryHistory({store,onSearch,openProduct,initialTab='events',itemFi
   varianceRead?: VarianceRead;
 }) {
   const [tab,setTab] = useState(initialTab);
-  return <s-section heading="Inventory changes">
-    {onSearch && <s-button slot="secondary-actions" variant="secondary" onClick={onSearch}>Search</s-button>}
+  return <s-section heading={onSearch ? undefined : 'Inventory changes'}>
+    {onSearch && <s-stack direction="inline" alignItems="center" justifyContent="space-between"
+      paddingBlockEnd="base" gap="base">
+      <s-heading>Inventory changes</s-heading>
+      <s-button variant="secondary" onClick={onSearch}>Search products</s-button>
+    </s-stack>}
     <s-tabs value={tab} onChange={event=>{
       const value = event.currentTarget.value;
       if (value==='events' || value==='proposals' || (value==='sales' && sales)) setTab(value);
@@ -355,6 +370,7 @@ function InventoryEventList({store,filter,openProduct,productImageUrl,pushScope}
 
   const error = locationError || filter?.error || listError;
   const loading = connected && !error && (!location || filter?.loading || (canRead && reading));
+  const showSummary = !filter && !showSynced && !hasUnsentEvents;
   return <s-stack direction="block" gap="small" paddingBlock="base">
     <s-stack direction="inline" alignItems="center" justifyContent="space-between" gap="base">
       <s-switch label="Show synced" checked={showSynced} onChange={event=>{
@@ -369,8 +385,9 @@ function InventoryEventList({store,filter,openProduct,productImageUrl,pushScope}
       heading={pushResult.error || (hasUnsentEvents?'Queued events synced to Shopify':'All events synced to Shopify')}/>}
     {error && <s-banner tone="warning" heading="Inventory ledger unavailable">{error}</s-banner>}
     {loading && <Loading label="Loading inventory events…"/>}
-    {!loading && connected && !error && !visibleEvents.length && !pushResult &&
+    {!showSummary && !loading && connected && !error && !visibleEvents.length && !pushResult &&
       <s-text color="subdued">{showSynced?'No recent inventory changes.':'No unsent changes in recent inventory events.'}</s-text>}
+    {showSummary && location && connected && !loading && !error && <SyncSummary location={location}/>}
     {visibleEvents.slice(0,visibleCount).map(event=>{
       const source = sources.get(eventSourceKey(event));
       const record = source?.name || [event.source,event.reference].filter(Boolean).join(' ');
@@ -386,6 +403,59 @@ function InventoryEventList({store,filter,openProduct,productImageUrl,pushScope}
     {visibleCount < visibleEvents.length && <s-stack direction="inline">
       <s-button variant="secondary" onClick={()=>setVisibleCount(count=>count+EVENT_ROWS_PER_PAGE)}>Load more</s-button>
     </s-stack>}
+  </s-stack>;
+}
+
+function SyncSummary({location}: {location: Location}) {
+  const now = useNow();
+  const [result,setResult] = useState<{location: Location; data?: InventorySyncSummary}>();
+  useEffect(()=>{
+    const controller = new AbortController();
+    inventorySyncSummary(location,controller.signal)
+      .then(data=>{if (!controller.signal.aborted) setResult({location,data});})
+      .catch(()=>{if (!controller.signal.aborted) setResult({location});});
+    return ()=>controller.abort();
+  },[location]);
+
+  if (result?.location!==location) return <Loading label="Checking recent Shopify syncs…"/>;
+  const data = result.data;
+  if (!data) return <s-banner tone="warning" heading="Sync stats unavailable">
+    Refresh inventory to try again.
+  </s-banner>;
+  return <s-stack direction="block" gap="base" paddingBlockStart="small">
+    <s-banner tone={data.pendingCount ? 'warning' : 'success'}
+      heading={data.pendingCount ? 'Inventory changes still waiting to sync' : 'No pending inventory changes'}>
+      {data.pendingCount ? `${data.pendingCount} pending. Refresh to check the list.` : undefined}
+    </s-banner>
+    <s-stack direction="block" gap="base" paddingBlockStart="base">
+      <s-stack direction="inline" alignItems="center" justifyContent="space-between" gap="base">
+        <s-heading>Shopify sync · Last hour</s-heading>
+        <s-text type="small" color="subdued">Checked {ago(data.checkedAt,now)}</s-text>
+      </s-stack>
+      <s-divider/>
+      <s-stack direction="inline" gap="base" paddingBlock="small">
+        <s-stack direction="block" gap="small-300" inlineSize="48%">
+          <s-text type="small" color="subdued">Events synced</s-text>
+          <s-heading>{data.syncedCount}</s-heading>
+        </s-stack>
+        <s-stack direction="block" gap="small-300" inlineSize="48%">
+          <s-text type="small" color="subdued">Average sync time</s-text>
+          <s-heading>{data.averageSyncMs===null ? '—' : duration(data.averageSyncMs)}</s-heading>
+        </s-stack>
+      </s-stack>
+      {data.byType.length>0 && <>
+        <s-divider/>
+        {data.byType.map(type=><s-stack key={type.eventType} direction="inline" alignItems="center"
+          justifyContent="space-between" gap="base">
+          <s-stack direction="block" gap="small-300">
+            <s-text type="strong">{type.label}</s-text>
+            <s-text type="small" color="subdued">{type.count} {type.count===1?'event':'events'}</s-text>
+          </s-stack>
+          <s-text>+{type.added} / −{type.removed} units</s-text>
+        </s-stack>)}
+        {data.hasResets && <s-text type="small" color="subdued">Unit totals exclude inventory resets.</s-text>}
+      </>}
+    </s-stack>
   </s-stack>;
 }
 
@@ -693,7 +763,7 @@ function ProductDetail({scope,selected,initialTab}: {scope: InventoryScope; sele
           <s-stack direction={isTablet?'inline':'block'} alignItems={isTablet?'start':'stretch'} gap="base">
             <s-stack direction="block" gap="base" inlineSize={isTablet?'33%':'100%'}>
               <s-stack direction="block" gap="small-300">
-                <s-heading>{product.title}</s-heading>
+                {product.title && <s-heading>{product.title}</s-heading>}
                 {labelFor(product) && <s-text color="subdued">{labelFor(product)}</s-text>}
               </s-stack>
               {product.imageUrl && <s-box inlineSize="256px" maxInlineSize="100%" blockSize="256px">

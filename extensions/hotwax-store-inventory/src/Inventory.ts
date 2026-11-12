@@ -24,6 +24,14 @@ export type InventoryEvent = {
   at: number; syncedAt?: number; delta: number; state: string; product?: Variant;
   messageId: string; messageType: string; messageAt: number; reset: boolean;
 };
+export type InventorySyncSummary = {
+  checkedAt: number;
+  pendingCount: number;
+  syncedCount: number;
+  averageSyncMs: number | null;
+  byType: {eventType: string; label: string; count: number; added: number; removed: number}[];
+  hasResets: boolean;
+};
 export type InventoryLevel = {available: number | null; onHand: number | null; committed: number | null; checkedAt: number};
 export type HotWaxLevel = {atp: number | null; reservations: number | null; onHand: number | null; checkedAt: number};
 export type ProposedVariance = {
@@ -103,9 +111,8 @@ export async function recentInventoryEvents(location: Location, signal: AbortSig
   return events.map(event=>({...event,product:products.get(event.itemId)}));
 }
 
-export async function productSyncEvents(location: Location, itemId: string, signal: AbortSignal) {
+async function* completeLocationLedger(location: Location, signal: AbortSignal) {
   const oms = inventoryConnection(location,signal);
-  const events: InventoryEvent[] = [];
   const seen = new Set<string>();
   let expectedCount: number | undefined;
   for (let index = 0; ; index++) {
@@ -127,19 +134,63 @@ export async function productSyncEvents(location: Location, itemId: string, sign
         throw new OmsLookupError('The location ledger changed while loading.');
       }
       seen.add(key);
-      if (text(row.shopifyInventoryItemId)!==itemId) continue;
-      if (event.state==='Synced' || event.state==='Cancelled') continue;
-      if (inventoryQuantity(row.computedInventoryChange)===null || !Number.isFinite(event.at) ||
-          (event.eventType.endsWith('_RESET') && row.resetInventoryLevel==null)) {
-        throw new OmsLookupError('A pending inventory change has incomplete quantities.');
-      }
-      events.push(event);
+      yield {row,event};
     }
     if (!page.hasMore) {
       if (seen.size!==expectedCount) throw new OmsLookupError('The location ledger changed while loading.');
-      return events;
+      return;
     }
   }
+}
+
+export async function productSyncEvents(location: Location, itemId: string, signal: AbortSignal) {
+  const events: InventoryEvent[] = [];
+  for await (const {row,event} of completeLocationLedger(location,signal)) {
+    if (event.itemId!==itemId || event.state==='Synced' || event.state==='Cancelled') continue;
+    if (inventoryQuantity(row.computedInventoryChange)===null || !Number.isFinite(event.at) ||
+        (event.eventType.endsWith('_RESET') && row.resetInventoryLevel==null)) {
+      throw new OmsLookupError('A pending inventory change has incomplete quantities.');
+    }
+    events.push(event);
+  }
+  return events;
+}
+
+export async function inventorySyncSummary(location: Location, signal: AbortSignal): Promise<InventorySyncSummary> {
+  const checkedAt = Date.now();
+  const since = checkedAt-60*60*1000;
+  const byType = new Map<string,InventorySyncSummary['byType'][number]>();
+  let hasResets = false;
+  let pendingCount = 0;
+  let syncedCount = 0;
+  let totalSyncMs = 0;
+  let timedEvents = 0;
+  // The endpoint sorts by creation time. Older events can still have synced in this hour.
+  for await (const {row,event} of completeLocationLedger(location,signal)) {
+    if (event.state!=='Synced' && event.state!=='Cancelled') pendingCount++;
+    const syncedAt = inventoryQuantity(row.systemMessageProcessedDate);
+    if (event.state!=='Synced' || syncedAt===null || syncedAt<since || syncedAt>checkedAt) continue;
+    syncedCount++;
+    const totals = byType.get(event.eventType) ?? {
+      eventType:event.eventType,label:event.source,count:0,added:0,removed:0,
+    };
+    totals.count++;
+    if (event.reset) {
+      hasResets = true;
+    } else {
+      const delta = inventoryQuantity(row.computedInventoryChange);
+      if (delta===null) throw new OmsLookupError('A synced inventory change has an incomplete quantity.');
+      totals.added += Math.max(delta,0);
+      totals.removed += Math.max(-delta,0);
+    }
+    if (Number.isFinite(event.at) && event.at>0 && event.at<=syncedAt) {
+      totalSyncMs += syncedAt-event.at;
+      timedEvents++;
+    }
+    byType.set(event.eventType,totals);
+  }
+  return {checkedAt,pendingCount,syncedCount,averageSyncMs:timedEvents ? totalSyncMs/timedEvents : null,hasResets,
+    byType:[...byType.values()].sort((left,right)=>right.count-left.count || left.label.localeCompare(right.label))};
 }
 
 export function queuedInventoryBatches(events: InventoryEvent[]) {
