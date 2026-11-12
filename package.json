@@ -7,11 +7,11 @@
   ],
   "scripts": {
     "shopify": "shopify",
-    "build": "node scripts/configure-oms.mjs --release && shopify app build && node scripts/check-bundle.mjs",
+    "build": "export SHOPIFY_FLAG_APP_CONFIG=${SHOPIFY_FLAG_APP_CONFIG:-shopify.app.toml}; node scripts/configure-oms.mjs --release && shopify app build && node scripts/check-bundle.mjs",
     "dev": "node scripts/configure-oms.mjs && shopify app dev",
     "info": "shopify app info",
     "generate": "shopify app generate",
-    "deploy": "node scripts/configure-oms.mjs --release && shopify app build && node scripts/check-bundle.mjs && shopify app deploy",
+    "deploy": "export SHOPIFY_FLAG_APP_CONFIG=${SHOPIFY_FLAG_APP_CONFIG:-shopify.app.toml}; node scripts/configure-oms.mjs --release && shopify app build && node scripts/check-bundle.mjs && shopify app deploy",
     "build:gorjana-sandbox": "SHOPIFY_FLAG_APP_CONFIG=gorjana-sandbox npm run build",
     "deploy:gorjana-sandbox": "SHOPIFY_FLAG_APP_CONFIG=gorjana-sandbox npm run deploy -- --config gorjana-sandbox",
     "pretest": "node scripts/configure-oms.mjs --release --if-missing",

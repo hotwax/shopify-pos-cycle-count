@@ -92,7 +92,7 @@ npm run build
 
 `typecheck` checks the shared TypeScript configuration; Shopify's build validates the extension bundles. Local tests exercise state and adapter logic and do not replace physical scanner, multi-terminal, or live OMS acceptance.
 
-Release only to the intended Shopify app:
+Release only to the intended Shopify app. `npm run deploy` always targets `shopify.app.toml` (HotWax Cycle Count); the Gorjana sandbox has its own scripts. Never run `shopify app deploy` directly: the CLI otherwise uses whichever app config was used last.
 
 ```sh
 npm run deploy -- --version <release-name> --message '<release-summary>'

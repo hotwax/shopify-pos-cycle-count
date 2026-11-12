@@ -1,11 +1,14 @@
-import {readFileSync} from 'node:fs';
+import {existsSync, readFileSync} from 'node:fs';
 import {brotliCompressSync, constants} from 'node:zlib';
 // Shopify rejects a UI extension whose compiled bundle exceeds 64 KB compressed
 // (Brotli quality 11, matching Shopify CLI's bundle measurement).
 // Fail the build first, keeping a small margin.
 const LIMIT = 64 * 1024, MARGIN = 512;
 let failed = false;
+// Every extension in this app's build; an app release can leave one out (for example
+// the Gorjana-only Store inventory tile), so measure the ones that are present.
 for (const handle of ['hotwax-cycle-count', 'app-home', 'hotwax-store-inventory']) {
+  if (!existsSync(`extensions/${handle}`)) continue;
   const bytes = brotliCompressSync(readFileSync(`extensions/${handle}/dist/${handle}.js`), {
     params: {[constants.BROTLI_PARAM_QUALITY]: 11},
   }).length;
